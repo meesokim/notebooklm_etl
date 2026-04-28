@@ -1,0 +1,41 @@
+[2026-04-28 10:23:39] INFO     filter_engine (filter_engine.py:60): ContentFilter 초기화: 포함 키워드 3개, 제외 키워드 2개
+[2026-04-28 10:23:39] WARNING  notebooklm_manager (notebooklm_manager.py:232): notebooklm-py 라이브러리를 찾을 수 없습니다. 시뮬레이션 모드로 실행됩니다. 설치: pip install notebooklm-py
+[2026-04-28 10:23:39] WARNING  notebooklm_manager (notebooklm_manager.py:257): [시뮬레이션] 노트북 목록 조회
+[2026-04-28 23:45:24] INFO     main (main.py:51): 디렉토리 초기화 완료
+[2026-04-28 23:45:40] INFO     main (main.py:51): 디렉토리 초기화 완료
+[2026-04-28 23:46:21] INFO     main (main.py:51): 디렉토리 초기화 완료
+[2026-04-28 23:46:29] INFO     main (main.py:51): 디렉토리 초기화 완료
+[2026-04-28 23:47:02] INFO     main (main.py:51): 디렉토리 초기화 완료
+[2026-04-28 23:47:07] INFO     main (main.py:51): 디렉토리 초기화 완료
+[2026-04-28 23:47:08] INFO     gui (main_app.py:1017): NotebookLM ETL Manager 시작
+[2026-04-28 23:48:03] INFO     main (main.py:52): 디렉토리 초기화 완료
+[2026-04-28 23:48:12] INFO     main (main.py:52): 디렉토리 초기화 완료
+[2026-04-28 23:48:12] INFO     gui (main_app.py:1017): NotebookLM ETL Manager 시작
+[2026-04-28 23:49:16] INFO     main (main.py:53): 디렉토리 초기화 완료
+[2026-04-28 23:49:24] INFO     main (main.py:53): 디렉토리 초기화 완료
+[2026-04-28 23:49:29] INFO     main (main.py:53): 디렉토리 초기화 완료
+[2026-04-28 23:49:55] INFO     main (main.py:53): 디렉토리 초기화 완료
+[2026-04-28 23:49:56] INFO     main (main.py:53): 디렉토리 초기화 완료
+[2026-04-28 23:50:01] INFO     main (main.py:53): 디렉토리 초기화 완료
+[2026-04-28 23:50:03] INFO     main (main.py:53): 디렉토리 초기화 완료
+[2026-04-28 23:50:03] INFO     gui (main_app.py:1018): NotebookLM ETL Manager 시작
+[2026-04-28 23:51:07] INFO     main (main.py:53): 디렉토리 초기화 완료
+[2026-04-28 23:51:08] INFO     gui (main_app.py:1036): NotebookLM ETL Manager 시작
+[2026-04-28 23:51:11] INFO     main (main.py:53): 디렉토리 초기화 완료
+[2026-04-28 23:51:17] INFO     main (main.py:53): 디렉토리 초기화 완료
+[2026-04-28 23:51:17] INFO     gui (main_app.py:1036): NotebookLM ETL Manager 시작
+[2026-04-28 23:52:15] INFO     main (main.py:55): 디렉토리 초기화 완료
+[2026-04-28 23:55:53] INFO     main (main.py:55): 디렉토리 초기화 완료
+[2026-04-28 23:55:53] INFO     gui (main_app.py:1037): NotebookLM ETL Manager 시작
+[2026-04-28 23:57:07] INFO     gui (main_app.py:621): 설정 저장 완료
+[2026-04-28 23:58:35] INFO     gui (main_app.py:621): 설정 저장 완료
+[2026-04-28 23:58:38] INFO     gui (main_app.py:916): 🌐 브라우저 히스토리 수집 시작...
+[2026-04-28 23:58:38] INFO     browser_extractor (browser_extractor.py:73): BrowserHistoryExtractor 초기화: ['chrome', 'edge']
+[2026-04-28 23:58:38] INFO     browser_extractor (browser_extractor.py:114): 브라우저 'chrome' 히스토리 추출 시작...
+[2026-04-28 23:58:38] INFO     browser_extractor (browser_extractor.py:114): 브라우저 'edge' 히스토리 추출 시작...
+[2026-04-28 23:58:38] INFO     browser_extractor (browser_extractor.py:154): 총 0개 고유 방문 기록 추출 완료
+[2026-04-28 23:58:38] INFO     gui (main_app.py:925):    ✓ 브라우저 히스토리 0개 수집 완료
+[2026-04-28 23:58:38] WARNING  gui (main_app.py:966): ⚠️ 업로드할 콘텐츠가 없습니다.
+[2026-04-28 23:58:53] INFO     gui (main_app.py:1026): email 부분 동기화 시작...
+[2026-04-28 23:59:08] INFO     gui (main_app.py:1026): browser 부분 동기화 시작...
+[2026-04-28 23:59:14] INFO     gui (main_app.py:1026): email 부분 동기화 시작...

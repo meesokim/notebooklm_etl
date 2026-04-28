@@ -1,0 +1,64 @@
+# NotebookLM ETL Pipeline - 의존성 패키지 목록
+# 설치 명령: pip install -r requirements.txt
+
+# ─── 핵심 의존성 ────────────────────────────────────────────
+# 웹 스크래핑
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# 동적 웹 페이지 스크래핑 (선택적, 네이버 카페 등)
+playwright>=1.40.0
+# 설치 후 추가 명령 필요: playwright install chromium
+
+# ─── 이메일 수집 ────────────────────────────────────────────
+# 표준 라이브러리 imaplib 사용 (별도 설치 불필요)
+# Gmail OAuth2 지원 (선택적)
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+
+# ─── 브라우저 히스토리 ──────────────────────────────────────
+# Chrome/Edge 히스토리 (SQLite 직접 접근, 별도 설치 불필요)
+# Firefox 히스토리 (SQLite 직접 접근, 별도 설치 불필요)
+
+# ─── Windows UI 자동화 (카카오톡, 선택적) ───────────────────
+pywinauto>=0.6.8; sys_platform == "win32"
+pyautogui>=0.9.54; sys_platform == "win32"
+
+# ─── 데이터 처리 ────────────────────────────────────────────
+pandas>=2.1.0
+python-dateutil>=2.8.2
+
+# ─── NotebookLM 연동 ────────────────────────────────────────
+# 비공식 API 클라이언트 (GitHub에서 설치)
+# pip install git+https://github.com/teng-lin/notebooklm-py.git
+notebooklm-py>=0.1.0
+
+# ─── GUI ────────────────────────────────────────────────────
+# tkinter는 Python 표준 라이브러리 (별도 설치 불필요)
+# Windows에서 tkinter가 없는 경우: python -m pip install tk
+
+# 시스템 트레이 아이콘 (선택적)
+pystray>=0.19.0; sys_platform == "win32"
+Pillow>=10.0.0
+
+# ─── 스케줄러 ───────────────────────────────────────────────
+schedule>=1.2.0
+APScheduler>=3.10.0
+
+# ─── 유틸리티 ───────────────────────────────────────────────
+python-dotenv>=1.0.0
+colorlog>=6.7.0
+tqdm>=4.66.0
+
+# ─── 보안 (비밀번호 안전 저장) ──────────────────────────────
+keyring>=24.2.0
+
+# ─── 문서 처리 ──────────────────────────────────────────────
+python-docx>=1.1.0
+openpyxl>=3.1.2
+PyPDF2>=3.0.1
+
+# ─── 개발/테스트 (선택적) ───────────────────────────────────
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
