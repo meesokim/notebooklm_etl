@@ -20,9 +20,20 @@ NotebookLM ETL Manager는 다양한 소스(이메일, 브라우저 히스토리,
 2. **의존성 설치:**
    ```bash
    pip install -r requirements.txt
-   playwright install chromium
    ```
-3. **NotebookLM 인증 (필수):**
+3. **Playwright 설치 (웹 수집 필수):**
+   본 프로그램은 네이버 카페 스크래핑 등을 위해 Playwright를 사용합니다. 
+   처음 사용 시 아래 명령어로 브라우저를 설치해야 합니다:
+   ```bash
+   # 브라우저 바이너리 설치
+   playwright install chromium
+   
+   # (Linux/WSL 전용) 시스템 의존성 설치
+   sudo playwright install-deps
+   ```
+   *참고: 프로그램 실행 시 Playwright가 설치되어 있지 않으면 자동으로 설치를 시도합니다.*
+
+4. **NotebookLM 인증 (필수):**
    이 도구는 비공식 NotebookLM API를 사용합니다. 최초 1회 브라우저를 통한 인증이 필요합니다.
    ```bash
    notebooklm auth

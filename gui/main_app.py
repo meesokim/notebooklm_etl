@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import sys
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -26,6 +27,43 @@ from extractors.kakao_extractor import KakaoMessage
 from extractors.web_scraper import WebContent
 
 logger = setup_logger("gui")
+
+
+class WindowsStartupManager:
+    """Windows 시작 프로그램 등록 관리"""
+    
+    REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    APP_NAME = "NotebookLM_ETL_Manager"
+
+    @staticmethod
+    def is_registered() -> bool:
+        if sys.platform != "win32": return False
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WindowsStartupManager.REG_PATH, 0, winreg.KEY_READ) as key:
+                winreg.QueryValueEx(key, WindowsStartupManager.APP_NAME)
+                return True
+        except WindowsError:
+            return False
+
+    @staticmethod
+    def register():
+        if sys.platform != "win32": return
+        import winreg
+        # pythonw.exe를 사용하여 콘솔 없이 실행되도록 등록
+        cmd = f'"{sys.executable.replace("python.exe", "pythonw.exe")}" "{Path(__file__).parent.parent / "main.py"}" --daemon'
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WindowsStartupManager.REG_PATH, 0, winreg.KEY_WRITE) as key:
+            winreg.SetValueEx(key, WindowsStartupManager.APP_NAME, 0, winreg.REG_SZ, cmd)
+
+    @staticmethod
+    def unregister():
+        if sys.platform != "win32": return
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WindowsStartupManager.REG_PATH, 0, winreg.KEY_WRITE) as key:
+                winreg.DeleteValue(key, WindowsStartupManager.APP_NAME)
+        except WindowsError:
+            pass
 
 # 색상 테마 (모던 다크/라이트 테마)
 COLORS = {
@@ -461,14 +499,37 @@ class SettingsTab(tk.Frame):
         self._add_checkbox(frame, "schedule_enabled", "자동 실행 활성화", s.schedule_enabled, 0)
         self._add_entry(frame, "schedule_interval", "실행 주기 (시간)", str(s.schedule_interval_hours), 1)
 
+        # Windows 자동 시작 등록 버튼
+        if sys.platform == "win32":
+            btn_text = "✅ 자동 시작 취소" if WindowsStartupManager.is_registered() else "🚀 Windows 시작 시 자동 실행"
+            self.startup_btn = tk.Button(
+                frame, text=btn_text,
+                font=get_best_font(9),
+                bg=COLORS["primary"] if not WindowsStartupManager.is_registered() else COLORS["warning"],
+                fg="white", relief=tk.FLAT, padx=10, pady=5,
+                command=self._toggle_startup
+            )
+            self.startup_btn.grid(row=2, column=0, columnspan=2, padx=10, pady=10, sticky="w")
+
         tk.Label(
             frame,
-            text="💡 Windows 시작 시 자동 실행을 원하면 시작 프로그램에 등록하세요.\n"
+            text="💡 Windows 시작 시 자동 실행을 원하면 위 버튼을 누르거나 시작 프로그램에 등록하세요.\n"
                  "    설치 가이드의 'Windows 시작 프로그램 등록' 섹션을 참고하세요.",
             font=("Malgun Gothic", 8),
             bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
             justify=tk.LEFT
         ).grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky="w")
+
+    def _toggle_startup(self):
+        """Windows 시작 프로그램 등록 토글"""
+        if WindowsStartupManager.is_registered():
+            WindowsStartupManager.unregister()
+            messagebox.showinfo("해제 완료", "Windows 시작 시 자동 실행이 해제되었습니다.")
+            self.startup_btn.config(text="🚀 Windows 시작 시 자동 실행", bg=COLORS["primary"])
+        else:
+            WindowsStartupManager.register()
+            messagebox.showinfo("등록 완료", "Windows 시작 시 자동 실행(백그라운드)이 등록되었습니다.")
+            self.startup_btn.config(text="✅ 자동 시작 취소", bg=COLORS["warning"])
 
     def _create_section(self, title: str) -> tk.Frame:
         """설정 섹션 프레임 생성."""
@@ -764,6 +825,9 @@ class NotebookLMETLApp:
         except Exception:
             pass
 
+        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
+        self._tray_icon = None
+
         self._build_ui()
         self._setup_logging_handler()
 
@@ -817,6 +881,7 @@ class NotebookLMETLApp:
     def check_environment(self):
         """실행 환경 및 필수 라이브러리 체크."""
         warnings = []
+        missing_playwright = False
         
         # 1. notebooklm-py 체크
         try:
@@ -827,7 +892,9 @@ class NotebookLMETLApp:
         # 2. Playwright 체크
         try:
             import playwright
+            # 라이브러리는 있지만 브라우저가 없는 경우도 체크 (추후 구현 가능)
         except ImportError:
+            missing_playwright = True
             warnings.append("- playwright 라이브러리가 설치되지 않았습니다. (네이버 카페 수집 불가)")
             
         # 3. NotebookLM 인증 체크
@@ -849,9 +916,43 @@ class NotebookLMETLApp:
         if warnings:
             warn_msg = "일부 기능이 정상적으로 작동하지 않을 수 있습니다:\n\n" + "\n".join(warnings)
             self.dashboard_tab.append_log(warn_msg, "WARNING")
-            messagebox.showwarning("환경 체크 알림", warn_msg)
+            
+            if missing_playwright:
+                if messagebox.askyesno("Playwright 설치", 
+                    "웹 수집(네이버 카페 등)에 필요한 Playwright가 설치되어 있지 않습니다.\n지금 자동으로 설치하시겠습니까?\n(수 분이 소요될 수 있습니다)"):
+                    self._setup_playwright_auto()
+            else:
+                messagebox.showwarning("환경 체크 알림", warn_msg)
         else:
             self.dashboard_tab.append_log("✅ 모든 필수 라이브러리 및 인증이 확인되었습니다.", "SUCCESS")
+
+    def _setup_playwright_auto(self):
+        """Playwright 및 브라우저 자동 설치 수행."""
+        import subprocess
+        
+        self.dashboard_tab.append_log("⏳ Playwright 자동 설치 시작...", "INFO")
+        self.status_bar.set_status("Playwright 설치 중...")
+        
+        def run_install():
+            try:
+                # 1. pip install
+                self.dashboard_tab.append_log("  - 라이브러리(pip) 설치 중...", "INFO")
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
+                
+                # 2. playwright install chromium
+                self.dashboard_tab.append_log("  - 브라우저(Chromium) 설치 중...", "INFO")
+                subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
+                
+                self.dashboard_tab.append_log("✅ Playwright 설치가 완료되었습니다. 프로그램을 재시작해 주세요.", "SUCCESS")
+                messagebox.showinfo("설치 완료", "Playwright 설치가 완료되었습니다.\n정상적인 동작을 위해 프로그램을 재시작해 주세요.")
+            except Exception as e:
+                err_msg = f"❌ Playwright 설치 중 오류 발생: {e}"
+                self.dashboard_tab.append_log(err_msg, "ERROR")
+                messagebox.showerror("설치 오류", f"자동 설치에 실패했습니다.\n터미널에서 직접 'playwright install chromium'을 실행해 보세요.\n\n오류: {e}")
+            finally:
+                self.root.after(0, lambda: self.status_bar.set_status("준비"))
+
+        threading.Thread(target=run_install, daemon=True).start()
 
 
     def _setup_logging_handler(self):
@@ -1042,6 +1143,45 @@ class NotebookLMETLApp:
         if messagebox.askyesno("소스 정리", "오래된 소스를 삭제하시겠습니까?"):
             logger.info("오래된 소스 정리 시작...")
             self.status_bar.set_status("소스 정리 중...")
+
+    def _on_closing(self):
+        """창을 닫을 때 트레이로 숨김 (Windows만)"""
+        if sys.platform == "win32":
+            self.root.withdraw()
+            if not self._tray_icon:
+                self._setup_tray()
+        else:
+            self._exit_app()
+
+    def _show_window(self):
+        """트레이에서 창 복구"""
+        self.root.after(0, self.root.deiconify)
+
+    def _exit_app(self, icon=None):
+        """완전 종료"""
+        if icon:
+            icon.stop()
+        self.root.quit()
+        sys.exit(0)
+
+    def _setup_tray(self):
+        """시스템 트레이 아이콘 설정"""
+        import pystray
+        from PIL import Image
+
+        # 아이콘 이미지 생성 (또는 파일 로드)
+        try:
+            image = Image.open("icon.ico")
+        except Exception:
+            # 기본 색상 사각형 아이콘 생성
+            image = Image.new('RGB', (64, 64), COLORS["primary"])
+
+        menu = (
+            pystray.item('열기', self._show_window),
+            pystray.item('종료', self._exit_app)
+        )
+        self._tray_icon = pystray.Icon("notebooklm_etl", image, "NotebookLM ETL", menu)
+        threading.Thread(target=self._tray_icon.run, daemon=True).start()
 
     def run(self):
         """애플리케이션을 실행합니다."""

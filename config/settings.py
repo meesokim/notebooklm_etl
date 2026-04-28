@@ -5,6 +5,7 @@ NotebookLM ETL Pipeline - 설정 관리 모듈
 
 import json
 import os
+import keyring
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Optional, Union
@@ -135,6 +136,15 @@ class SettingsManager:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 self._settings = self._dict_to_settings(data)
+                
+                # Keyring에서 비밀번호 로드 (백엔드 부재 시 예외 처리)
+                if self._settings.email.username:
+                    try:
+                        stored_pwd = keyring.get_password("notebooklm_etl", self._settings.email.username)
+                        if stored_pwd:
+                            self._settings.email.password = stored_pwd
+                    except Exception as e:
+                        print(f"[INFO] Keyring 백엔드를 사용할 수 없습니다. (비밀번호 자동 로드 건너뜀)")
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"[WARNING] 설정 파일 로드 실패: {e}. 기본값을 사용합니다.")
                 self._settings = AppSettings()
@@ -145,9 +155,23 @@ class SettingsManager:
 
     def save(self, settings: AppSettings) -> None:
         """설정을 JSON 파일로 저장."""
+        password_saved_in_keyring = False
+        # 비밀번호는 Keyring에 따로 저장하고 JSON에는 빈 값으로 저장 시도
+        if settings.email.username and settings.email.password:
+            try:
+                keyring.set_password("notebooklm_etl", settings.email.username, settings.email.password)
+                password_saved_in_keyring = True
+            except Exception:
+                print(f"[WARNING] Keyring 백엔드 오류로 비밀번호를 안전하게 저장하지 못했습니다.")
+        
+        # 보안을 위해 실제 비밀번호를 제외한 복사본 저장
+        temp_settings = asdict(settings)
+        if password_saved_in_keyring:
+            temp_settings['email']['password'] = ""
+        
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.config_path, 'w', encoding='utf-8') as f:
-            json.dump(asdict(settings), f, ensure_ascii=False, indent=2)
+            json.dump(temp_settings, f, ensure_ascii=False, indent=2)
         self._settings = settings
 
     def get(self) -> AppSettings:
