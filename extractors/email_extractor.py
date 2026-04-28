@@ -180,43 +180,51 @@ class EmailExtractor:
         since_date = (datetime.now() - timedelta(days=days_back)).strftime("%d-%b-%Y")
 
         for folder in folders:
-            logger.info(f"폴더 '{folder}' 처리 중...")
+            logger.info(f"📂 폴더 '{folder}' 접속 중...")
             try:
                 # 폴더 선택
                 status, _ = self.connection.select(f'"{folder}"' if ' ' in folder else folder)
                 if status != 'OK':
-                    logger.warning(f"폴더 '{folder}' 선택 실패")
+                    logger.warning(f"  ✗ 폴더 '{folder}' 선택 실패")
                     continue
 
                 # 날짜 기반 검색
+                logger.info(f"  🔍 {since_date} 이후 메일 검색 중...")
                 _, msg_ids = self.connection.search(None, f'SINCE {since_date}')
                 if not msg_ids or not msg_ids[0]:
-                    logger.info(f"폴더 '{folder}': 해당 기간 내 메일 없음")
+                    logger.info(f"  ℹ️ 폴더 '{folder}': 해당 기간 내 메일 없음")
                     continue
 
                 uid_list = msg_ids[0].split()
-                logger.info(f"폴더 '{folder}': {len(uid_list)}개 메일 발견")
+                total_found = len(uid_list)
+                logger.info(f"  ✅ {total_found}개의 메일 발견 (최대 {max_emails}개 처리 예정)")
 
                 # 최신 메일부터 처리 (역순)
                 uid_list = uid_list[::-1][:max_emails]
 
-                for uid in uid_list:
+                for i, uid in enumerate(uid_list, 1):
                     if len(all_emails) >= max_emails:
+                        logger.info(f"  🛑 최대 수집 개수({max_emails})에 도달하여 중단합니다.")
                         break
 
+                    logger.info(f"  📩 [{i}/{len(uid_list)}] 메일 가져오는 중 (UID: {uid.decode()})...")
                     email_item = self._fetch_email(uid.decode(), folder)
                     if email_item is None:
+                        logger.warning(f"    ✗ 메일 내용 읽기 실패 (UID: {uid.decode()})")
                         continue
 
                     # 발신자 필터링
                     if self._should_exclude_sender(email_item.sender_email, exclude_senders):
+                        logger.info(f"    ⏩ 제외된 발신자: {email_item.sender_email}")
                         continue
 
                     # 키워드 필터링 (키워드가 설정된 경우에만)
                     if filter_keywords:
                         if not self._matches_keywords(email_item, filter_keywords):
+                            logger.info(f"    ⏩ 키워드 미일치로 건너뜀: {email_item.subject[:30]}...")
                             continue
 
+                    logger.info(f"    ✨ 수집 완료: {email_item.subject[:40]}...")
                     all_emails.append(email_item)
 
             except Exception as e:
