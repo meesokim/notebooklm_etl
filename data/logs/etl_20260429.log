@@ -1,0 +1,31 @@
+[2026-04-29 00:14:37] INFO     main (main.py:55): 디렉토리 초기화 완료
+[2026-04-29 00:14:37] INFO     gui (main_app.py:1037): NotebookLM ETL Manager 시작
+[2026-04-29 00:36:19] INFO     main (main.py:55): 디렉토리 초기화 완료
+[2026-04-29 00:36:19] INFO     gui (main_app.py:1037): NotebookLM ETL Manager 시작
+[2026-04-29 00:36:40] INFO     main (main.py:55): 디렉토리 초기화 완료
+[2026-04-29 00:36:40] INFO     gui (main_app.py:1037): NotebookLM ETL Manager 시작
+[2026-04-29 00:37:02] INFO     main (main.py:55): 디렉토리 초기화 완료
+[2026-04-29 00:37:03] INFO     gui (main_app.py:1037): NotebookLM ETL Manager 시작
+[2026-04-29 00:38:48] INFO     main (main.py:55): 디렉토리 초기화 완료
+[2026-04-29 00:38:48] INFO     gui (main_app.py:1054): NotebookLM ETL Manager 시작
+[2026-04-29 00:39:33] INFO     notebooklm_manager (notebooklm_manager.py:229): notebooklm-py 라이브러리 사용 가능
+[2026-04-29 00:39:33] WARNING  notebooklm_manager (notebooklm_manager.py:257): [시뮬레이션] 노트북 목록 조회
+[2026-04-29 00:39:47] INFO     notebooklm_manager (notebooklm_manager.py:229): notebooklm-py 라이브러리 사용 가능
+[2026-04-29 00:39:47] WARNING  notebooklm_manager (notebooklm_manager.py:257): [시뮬레이션] 노트북 목록 조회
+[2026-04-29 00:40:29] INFO     main (main.py:55): 디렉토리 초기화 완료
+[2026-04-29 00:40:29] INFO     gui (main_app.py:1054): NotebookLM ETL Manager 시작
+[2026-04-29 00:43:02] INFO     main (main.py:55): 디렉토리 초기화 완료
+[2026-04-29 00:43:03] INFO     gui (main_app.py:1048): NotebookLM ETL Manager 시작
+[2026-04-29 00:43:08] INFO     gui (main_app.py:927): 🌐 브라우저 히스토리 수집 시작...
+[2026-04-29 00:43:08] INFO     browser_extractor (browser_extractor.py:73): BrowserHistoryExtractor 초기화: ['chrome', 'edge']
+[2026-04-29 00:43:08] INFO     browser_extractor (browser_extractor.py:114): 브라우저 'chrome' 히스토리 추출 시작...
+[2026-04-29 00:43:08] INFO     browser_extractor (browser_extractor.py:114): 브라우저 'edge' 히스토리 추출 시작...
+[2026-04-29 00:43:08] INFO     browser_extractor (browser_extractor.py:154): 총 0개 고유 방문 기록 추출 완료
+[2026-04-29 00:43:08] INFO     gui (main_app.py:936):    ✓ 브라우저 히스토리 0개 수집 완료
+[2026-04-29 00:43:08] WARNING  gui (main_app.py:977): ⚠️ 업로드할 콘텐츠가 없습니다.
+[2026-04-29 00:43:11] INFO     gui (main_app.py:1037): email 부분 동기화 시작...
+[2026-04-29 00:43:14] INFO     gui (main_app.py:1037): browser 부분 동기화 시작...
+[2026-04-29 00:43:19] INFO     gui (main_app.py:1043): 오래된 소스 정리 시작...
+[2026-04-29 00:43:29] INFO     gui (main_app.py:1037): email 부분 동기화 시작...
+[2026-04-29 00:43:30] INFO     gui (main_app.py:1037): browser 부분 동기화 시작...
+[2026-04-29 00:43:36] INFO     gui (main_app.py:1043): 오래된 소스 정리 시작...

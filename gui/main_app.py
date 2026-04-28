@@ -830,10 +830,21 @@ class NotebookLMETLApp:
         except ImportError:
             warnings.append("- playwright 라이브러리가 설치되지 않았습니다. (네이버 카페 수집 불가)")
             
-        # 3. NotebookLM 인증 체크 (파일 존재 여부로 간접 확인)
-        auth_file = Path.home() / ".notebooklm" / "storage.json"
-        if not auth_file.exists():
-            warnings.append("- NotebookLM 인증 정보가 없습니다. 'notebooklm auth'를 먼저 실행하세요.")
+        # 3. NotebookLM 인증 체크
+        auth_verified = False
+        try:
+            import notebooklm
+            # 두 가지 가능한 인증 파일명 모두 체크
+            auth_dir = Path.home() / ".notebooklm"
+            possible_files = ["storage.json", "storage_state.json"]
+            
+            if any((auth_dir / f).exists() for f in possible_files):
+                auth_verified = True
+        except ImportError:
+            pass
+            
+        if not auth_verified:
+            warnings.append("- NotebookLM 인증 정보 파일을 찾을 수 없습니다. (동기화 실패 시 'notebooklm auth' 재실행 권장)")
             
         if warnings:
             warn_msg = "일부 기능이 정상적으로 작동하지 않을 수 있습니다:\n\n" + "\n".join(warnings)
