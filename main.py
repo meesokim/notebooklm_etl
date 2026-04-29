@@ -325,11 +325,12 @@ def main():
 
     # Windows 콘솔에서 한글 깨짐 방지
     if sys.platform == "win32":
-        try:
-            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
-        except Exception:
-            pass
+        if not hasattr(sys.stdout, 'encoding') or sys.stdout.encoding.lower() != 'utf-8':
+            try:
+                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+                sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
+            except (AttributeError, io.UnsupportedOperation):
+                pass
 
     parser = argparse.ArgumentParser(
         description="NotebookLM ETL Manager - 데이터 소스 자동화 관리 도구",

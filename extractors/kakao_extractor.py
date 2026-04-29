@@ -177,6 +177,7 @@ class KakaoTalkExtractor:
             # 카카오톡 프로세스 찾기
             try:
                 app = Application(backend='uia').connect(title_re="카카오톡.*", timeout=5)
+                print(app)
             except Exception:
                 logger.warning("카카오톡이 실행 중이지 않습니다.")
                 return []
@@ -193,7 +194,9 @@ class KakaoTalkExtractor:
         except ImportError:
             logger.error("pywinauto가 설치되지 않았습니다. 'pip install pywinauto'를 실행하세요.")
             return []
-        except Exception as e:
+        except:
+            import traceback
+            traceback.print_exc()
             logger.error(f"UI 자동화 오류: {e}")
             return []
 
@@ -219,29 +222,47 @@ class KakaoTalkExtractor:
             if chat_window.exists():
                 # 전체 선택 및 복사
                 chat_window.set_focus()
-                chat_window.type_keys('^a')
-                time.sleep(0.3)
-                chat_window.type_keys('^c')
-                time.sleep(0.3)
+                chat_window.type_keys('^a^c')  # ^a(전체선택) 후 ^c(복사)
+                time.sleep(1.0)  # 클립보드 복사 대기 시간 증가
 
-                # 클립보드에서 텍스트 가져오기
-                import tkinter as tk
-                root = tk.Tk()
-                root.withdraw()
-                clipboard_text = root.clipboard_get()
-                root.destroy()
+                # pywinauto 내장 클립보드 기능 사용 (더 안정적)
+                try:
+                    import pywinauto.clipboard
+                    clipboard_text = pywinauto.clipboard.GetData()
+                except Exception as e:
+                    logger.warning(f"클립보드 데이터 읽기 실패: {e}")
+                    clipboard_text = ""
 
                 # 텍스트 파싱
                 if clipboard_text:
-                    # 간단한 파싱 (실제 구현에서는 더 정교한 파싱 필요)
-                    for line in clipboard_text.split('\n')[:max_messages]:
-                        if line.strip():
-                            messages.append(KakaoMessage(
-                                room_name=room_name,
-                                sender="알 수 없음",
-                                message=line.strip(),
-                                timestamp=datetime.now().strftime('%Y-%m-%d %H:%M'),
-                            ))
+                    # 카카오톡 복사 텍스트 형식 파싱 (날짜, 시간, 발신자, 메시지 분리 시도)
+                    current_sender = "알 수 없음"
+                    for line in clipboard_text.split('\n'):
+                        line = line.strip()
+                        if not line: continue
+                        
+                        # [발신자] [오후 12:00] 메시지 형태인 경우
+                        match = re.match(r'^\[(.+?)\] \[(오전|오후) \d{1,2}:\d{2}\] (.+)$', line)
+                        if match:
+                            current_sender = match.group(1)
+                            message_text = match.group(3)
+                        else:
+                            message_text = line
+
+                        # 링크 추출
+                        links = re.findall(r'https?://[^\s]+', message_text)
+
+                        messages.append(KakaoMessage(
+                            room_name=room_name,
+                            sender=current_sender,
+                            message=message_text,
+                            timestamp=datetime.now().strftime('%Y-%m-%d %H:%M'),
+                            links=links,
+                            message_type="link" if links else "text"
+                        ))
+                        
+                        if len(messages) >= max_messages:
+                            break
 
         except Exception as e:
             logger.warning(f"채팅방 '{room_name}' 추출 실패: {e}")

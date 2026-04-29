@@ -19,8 +19,14 @@ def setup_logger(name: str = "notebooklm_etl", level: str = "INFO") -> logging.L
 
     # Windows 콘솔에서 한글 깨짐 방지
     if sys.platform == "win32":
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+        # 이미 UTF-8로 설정되어 있는지 확인하고, 아닐 경우에만 안전하게 래핑
+        if not hasattr(sys.stdout, 'encoding') or sys.stdout.encoding.lower() != 'utf-8':
+            try:
+                # 스트림이 닫히지 않도록 조심스럽게 재정의
+                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+                sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
+            except (AttributeError, io.UnsupportedOperation):
+                pass
 
     logger = logging.getLogger(name)
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
