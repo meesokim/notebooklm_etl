@@ -270,6 +270,7 @@ def show_status(settings_manager: SettingsManager):
         from loaders.notebooklm_manager import SourceTracker
         tracker = SourceTracker()
         stats = tracker.get_statistics()
+        tracker.close()
         print(f"\n📊 소스 통계:")
         print(f"   활성 소스: {stats.get('active_sources', 0)}개")
         print(f"   삭제된 소스: {stats.get('deleted_sources', 0)}개")

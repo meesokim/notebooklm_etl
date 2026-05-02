@@ -10,20 +10,21 @@ notebooklm-py 비공식 API 라이브러리를 사용하여 NotebookLM과 연동
 import asyncio
 import json
 import time
-import sqlite3
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass, field, asdict
 
 import sys
+from contextlib import contextmanager
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.logger import setup_logger
 
 logger = setup_logger("notebooklm_manager")
 
-# 로컬 소스 추적 DB 경로
-SOURCE_TRACKING_DB = Path(__file__).parent.parent / "data" / "source_tracking.db"
+# 로컬 소스 추적 DB 경로 (JSON으로 변경)
+SOURCE_TRACKING_DB = Path(__file__).parent.parent / "data" / "source_tracking.json"
 
 
 @dataclass
@@ -42,7 +43,7 @@ class SourceRecord:
 
 class SourceTracker:
     """
-    업로드된 소스의 메타데이터를 로컬 SQLite DB에서 추적하는 클래스.
+    업로드된 소스의 메타데이터를 로컬 JSON 파일에서 추적하는 클래스.
     NotebookLM의 소스 제한(50개)을 관리하고 중복 업로드를 방지합니다.
     """
 
@@ -53,43 +54,89 @@ class SourceTracker:
 
     def _init_db(self):
         """데이터베이스 초기화."""
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS sources (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_id TEXT UNIQUE,
-                notebook_id TEXT NOT NULL,
-                notebook_name TEXT,
-                title TEXT,
-                source_type TEXT,
-                local_file TEXT,
-                uploaded_at TEXT,
-                content_hash TEXT,
-                is_active INTEGER DEFAULT 1,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        conn.commit()
-        conn.close()
+        if not self.db_path.exists():
+            self._save_data({"sources": []})
+
+    @contextmanager
+    def _lock_file(self, mode='r'):
+        """OS 파일 생성을 이용한 크로스 플랫폼 잠금. JSON 파일 동시성 문제 방지."""
+        lock_path = self.db_path.with_suffix('.lock')
+        start_time = time.time()
+        
+        while True:
+            try:
+                # O_CREAT | O_EXCL는 파일이 없을 때만 생성, 있으면 에러
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                os.close(fd)
+                break
+            except (FileExistsError, OSError):
+                if time.time() - start_time > 10:
+                    raise RuntimeError("Timeout waiting for file lock")
+                time.sleep(0.1)
+
+        file_obj = None
+        try:
+            file_mode = 'r+' if mode == 'w' else 'r'
+            if not self.db_path.exists() and mode == 'w':
+                file_mode = 'w+'
+                
+            if self.db_path.exists() or mode == 'w':
+                file_obj = open(self.db_path, file_mode, encoding='utf-8')
+            
+            yield file_obj
+            
+        finally:
+            if file_obj:
+                try:
+                    file_obj.close()
+                except Exception:
+                    pass
+            try:
+                if lock_path.exists():
+                    os.unlink(str(lock_path))
+            except OSError:
+                pass
+
+    def _load_data(self) -> Dict:
+        try:
+            with self._lock_file('r') as f:
+                content = f.read().strip()
+                if not content:
+                    return {"sources": []}
+                return json.loads(content)
+        except Exception as e:
+            logger.error(f"JSON 데이터 로드 실패: {e}")
+            return {"sources": []}
+
+    def _save_data(self, data: Dict):
+        try:
+            with self._lock_file('w') as f:
+                f.seek(0)
+                f.truncate()
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"JSON 데이터 저장 실패: {e}")
+
+    def close(self):
+        """이전 SQLite 인터페이스 호환성을 위해 유지"""
+        pass
 
     def add_source(self, record: SourceRecord) -> bool:
         """소스 레코드를 추가합니다."""
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO sources
-                (source_id, notebook_id, notebook_name, title, source_type,
-                 local_file, uploaded_at, content_hash, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                record.source_id, record.notebook_id, record.notebook_name,
-                record.title, record.source_type, record.local_file,
-                record.uploaded_at, record.content_hash, 1 if record.is_active else 0
-            ))
-            conn.commit()
-            conn.close()
+            data = self._load_data()
+            # 기존 레코드 업데이트 또는 새 레코드 추가
+            updated = False
+            for i, src in enumerate(data["sources"]):
+                if src["source_id"] == record.source_id:
+                    data["sources"][i] = asdict(record)
+                    updated = True
+                    break
+            
+            if not updated:
+                data["sources"].append(asdict(record))
+                
+            self._save_data(data)
             return True
         except Exception as e:
             logger.error(f"소스 레코드 추가 실패: {e}")
@@ -98,15 +145,13 @@ class SourceTracker:
     def mark_deleted(self, source_id: str) -> bool:
         """소스를 삭제 상태로 표시합니다."""
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            cursor = conn.cursor()
-            cursor.execute(
-                'UPDATE sources SET is_active = 0 WHERE source_id = ?',
-                (source_id,)
-            )
-            conn.commit()
-            conn.close()
-            return True
+            data = self._load_data()
+            for src in data["sources"]:
+                if src["source_id"] == source_id:
+                    src["is_active"] = False
+                    self._save_data(data)
+                    return True
+            return False
         except Exception as e:
             logger.error(f"소스 상태 업데이트 실패: {e}")
             return False
@@ -114,19 +159,15 @@ class SourceTracker:
     def get_active_sources(self, notebook_id: str) -> List[SourceRecord]:
         """특정 노트북의 활성 소스 목록을 반환합니다."""
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT source_id, notebook_id, notebook_name, title, source_type,
-                       local_file, uploaded_at, content_hash, is_active
-                FROM sources
-                WHERE notebook_id = ? AND is_active = 1
-                ORDER BY uploaded_at ASC
-            ''', (notebook_id,))
-            rows = cursor.fetchall()
-            conn.close()
-
-            return [SourceRecord(*row) for row in rows]
+            data = self._load_data()
+            active_sources = [
+                SourceRecord(**src) 
+                for src in data["sources"] 
+                if src["notebook_id"] == notebook_id and src.get("is_active", True)
+            ]
+            # uploaded_at 기준으로 오름차순 정렬
+            active_sources.sort(key=lambda x: x.uploaded_at)
+            return active_sources
         except Exception as e:
             logger.error(f"소스 목록 조회 실패: {e}")
             return []
@@ -134,58 +175,38 @@ class SourceTracker:
     def is_already_uploaded(self, content_hash: str, notebook_id: str) -> bool:
         """동일한 콘텐츠가 이미 업로드되었는지 확인합니다."""
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT COUNT(*) FROM sources
-                WHERE content_hash = ? AND notebook_id = ? AND is_active = 1
-            ''', (content_hash, notebook_id))
-            count = cursor.fetchone()[0]
-            conn.close()
-            return count > 0
+            data = self._load_data()
+            for src in data["sources"]:
+                if (src["content_hash"] == content_hash and 
+                    src["notebook_id"] == notebook_id and 
+                    src.get("is_active", True)):
+                    return True
+            return False
         except Exception:
             return False
 
     def get_oldest_sources(self, notebook_id: str, count: int) -> List[SourceRecord]:
         """가장 오래된 소스 N개를 반환합니다 (삭제 대상 선정용)."""
-        try:
-            conn = sqlite3.connect(str(self.db_path))
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT source_id, notebook_id, notebook_name, title, source_type,
-                       local_file, uploaded_at, content_hash, is_active
-                FROM sources
-                WHERE notebook_id = ? AND is_active = 1
-                ORDER BY uploaded_at ASC
-                LIMIT ?
-            ''', (notebook_id, count))
-            rows = cursor.fetchall()
-            conn.close()
-            return [SourceRecord(*row) for row in rows]
-        except Exception as e:
-            logger.error(f"오래된 소스 조회 실패: {e}")
-            return []
+        active_sources = self.get_active_sources(notebook_id)
+        return active_sources[:count]
 
     def get_statistics(self) -> Dict[str, Any]:
         """전체 소스 통계를 반환합니다."""
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            cursor = conn.cursor()
-
-            cursor.execute('SELECT COUNT(*) FROM sources WHERE is_active = 1')
-            active_count = cursor.fetchone()[0]
-
-            cursor.execute('SELECT COUNT(*) FROM sources WHERE is_active = 0')
-            deleted_count = cursor.fetchone()[0]
-
-            cursor.execute('''
-                SELECT notebook_name, COUNT(*) as cnt
-                FROM sources WHERE is_active = 1
-                GROUP BY notebook_id
-            ''')
-            per_notebook = dict(cursor.fetchall())
-
-            conn.close()
+            data = self._load_data()
+            active_count = 0
+            deleted_count = 0
+            per_notebook = {}
+            
+            for src in data["sources"]:
+                is_active = src.get("is_active", True)
+                if is_active:
+                    active_count += 1
+                    nb_id = src["notebook_id"]
+                    per_notebook[nb_id] = per_notebook.get(nb_id, 0) + 1
+                else:
+                    deleted_count += 1
+                    
             return {
                 "active_sources": active_count,
                 "deleted_sources": deleted_count,
@@ -243,7 +264,11 @@ class NotebookLMManager:
 
         try:
             from notebooklm import NotebookLMClient
-            self._client = await NotebookLMClient.from_storage().__aenter__()
+            client = await NotebookLMClient.from_storage()
+            if hasattr(client, "__aenter__"):
+                self._client = await client.__aenter__()
+            else:
+                self._client = client
             logger.info("NotebookLM 클라이언트 초기화 성공")
             return True
         except Exception as e:
@@ -483,6 +508,7 @@ class NotebookLMManager:
                 await self._client.__aexit__(None, None, None)
             except Exception:
                 pass
+        self.tracker.close()
 
 
 class ETLOrchestrator:

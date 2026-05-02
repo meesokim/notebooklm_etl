@@ -170,35 +170,76 @@ class KakaoTalkExtractor:
             logger.warning("UI 자동화는 Windows 환경에서만 지원됩니다.")
             return []
 
+        target_rooms = target_rooms or ["나에게 쓰기"]
+        messages: List[KakaoMessage] = []
+
+        # 1) kakaotalk.py의 안정화된 내보내기 경로 사용
+        try:
+            from kakaotalk import extract_messages_from_chatroom
+            logger.info("카카오톡 내보내기 자동화 경로를 사용합니다. (kakaotalk.py)")
+
+            for room_name in target_rooms:
+                if len(messages) >= max_messages:
+                    break
+
+                remaining = max_messages - len(messages)
+                logger.info(f"채팅방 '{room_name}' 내보내기/파싱 시작... (남은 한도: {remaining})")
+
+                try:
+                    exported_file = extract_messages_from_chatroom(room_name)
+                    if not exported_file:
+                        logger.warning(f"채팅방 '{room_name}' 내보내기 파일 경로를 얻지 못했습니다.")
+                        continue
+
+                    room_messages = self.extract_from_export_file(
+                        exported_file,
+                        max_messages=remaining
+                    )
+                    if not room_messages:
+                        logger.warning(f"채팅방 '{room_name}' 파싱 결과가 비어 있습니다.")
+                        continue
+
+                    for m in room_messages:
+                        m.room_name = room_name
+                    messages.extend(room_messages)
+                    logger.info(f"채팅방 '{room_name}' 추출 완료: {len(room_messages)}개")
+                except Exception as e:
+                    logger.warning(f"채팅방 '{room_name}' 내보내기 기반 추출 실패: {e}")
+
+            if messages:
+                logger.info(f"카카오톡 추출 완료(내보내기 경로): 총 {len(messages)}개")
+                return messages[:max_messages]
+            logger.warning("내보내기 경로에서 메시지를 얻지 못해 pywinauto 폴백을 시도합니다.")
+
+        except Exception as e:
+            logger.warning(f"kakaotalk.py 경로 사용 실패, pywinauto 폴백 시도: {e}")
+
+        # 2) 기존 pywinauto 방식 폴백
         try:
             import pywinauto
             from pywinauto import Application
 
-            # 카카오톡 프로세스 찾기
             try:
                 app = Application(backend='uia').connect(title_re="카카오톡.*", timeout=5)
-                print(app)
             except Exception:
                 logger.warning("카카오톡이 실행 중이지 않습니다.")
                 return []
 
-            messages = []
-            target_rooms = target_rooms or ["나에게 쓰기"]
-
             for room_name in target_rooms:
-                room_messages = self._extract_from_room(app, room_name, max_messages)
+                if len(messages) >= max_messages:
+                    break
+                remaining = max_messages - len(messages)
+                room_messages = self._extract_from_room(app, room_name, remaining)
                 messages.extend(room_messages)
 
-            return messages
+            return messages[:max_messages]
 
         except ImportError:
             logger.error("pywinauto가 설치되지 않았습니다. 'pip install pywinauto'를 실행하세요.")
-            return []
-        except:
-            import traceback
-            traceback.print_exc()
+            return messages[:max_messages]
+        except Exception as e:
             logger.error(f"UI 자동화 오류: {e}")
-            return []
+            return messages[:max_messages]
 
     def _extract_from_room(self, app, room_name: str, max_messages: int) -> List[KakaoMessage]:
         """특정 채팅방에서 메시지를 추출합니다."""

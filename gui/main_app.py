@@ -786,6 +786,7 @@ class SourceManagerTab(tk.Frame):
                         source.uploaded_at[:16].replace('T', ' '),
                         "활성"
                     ), tags=(source.source_id,))
+            tracker.close()
 
         except Exception as e:
             logger.warning(f"소스 목록 로드 실패: {e}")

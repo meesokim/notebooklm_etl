@@ -10,6 +10,7 @@ import email.utils
 import email.message
 import re
 import html
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -88,6 +89,8 @@ class EmailExtractor:
         self.username = username
         self.password = password
         self.connection: Optional[imaplib.IMAP4_SSL] = None
+        self.is_authenticated = False
+        self.provider = provider
 
         if provider in IMAP_PRESETS:
             preset = IMAP_PRESETS[provider]
@@ -99,18 +102,61 @@ class EmailExtractor:
 
         logger.info(f"EmailExtractor 초기화: {provider} ({self.server}:{self.port})")
 
+    @staticmethod
+    def load_email_config(config_path: Optional[str] = None) -> Dict:
+        """user_config.json에서 email 설정을 로드."""
+        default_path = Path(__file__).parent.parent / "config" / "user_config.json"
+        cfg_path = Path(config_path) if config_path else default_path
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            email_cfg = data.get("email", {})
+            if not isinstance(email_cfg, dict):
+                return {}
+            return email_cfg
+        except Exception as e:
+            logger.error(f"이메일 설정 로드 실패: {cfg_path} ({e})")
+            return {}
+
+    @classmethod
+    def from_user_config(cls, config_path: Optional[str] = None) -> "EmailExtractor":
+        """user_config.json 기반으로 EmailExtractor 인스턴스를 생성."""
+        email_cfg = cls.load_email_config(config_path)
+        provider = email_cfg.get("provider", "naver")
+        username = email_cfg.get("username", "")
+        password = email_cfg.get("password", "")
+        custom_server = email_cfg.get("imap_server")
+        custom_port = int(email_cfg.get("imap_port", 993))
+
+        if provider in IMAP_PRESETS:
+            custom_server = None
+            custom_port = IMAP_PRESETS[provider]["port"]
+
+        return cls(
+            provider=provider,
+            username=username,
+            password=password,
+            custom_server=custom_server,
+            custom_port=custom_port
+        )
+
     def connect(self) -> bool:
         """IMAP 서버에 연결 및 로그인."""
         try:
             self.connection = imaplib.IMAP4_SSL(self.server, self.port)
             self.connection.login(self.username, self.password)
+            self.is_authenticated = True
             logger.info(f"IMAP 연결 성공: {self.username}")
             return True
         except imaplib.IMAP4.error as e:
             logger.error(f"IMAP 로그인 실패: {e}")
+            if self.provider == "naver":
+                logger.error("네이버 메일 웹 설정에서 IMAP/SMTP 사용을 활성화했는지 확인하세요.")
+            self.disconnect()
             return False
         except Exception as e:
             logger.error(f"IMAP 연결 오류: {e}")
+            self.disconnect()
             return False
 
     def disconnect(self) -> None:
@@ -121,7 +167,15 @@ class EmailExtractor:
                 logger.info("IMAP 연결 종료")
             except Exception:
                 pass
-            self.connection = None
+        self.connection = None
+        self.is_authenticated = False
+
+    def _is_connection_ready(self) -> bool:
+        """인증된 IMAP 세션인지 확인."""
+        if not self.connection or not self.is_authenticated:
+            return False
+        state = getattr(self.connection, "state", "")
+        return state in {"AUTH", "SELECTED"}
 
     def list_folders(self) -> List[str]:
         """사용 가능한 메일 폴더 목록 반환."""
@@ -167,7 +221,7 @@ class EmailExtractor:
         Returns:
             추출된 EmailItem 목록
         """
-        if not self.connection:
+        if not self._is_connection_ready():
             logger.error("IMAP 연결이 없습니다. connect()를 먼저 호출하세요.")
             return []
 
@@ -430,9 +484,23 @@ def emails_to_markdown(emails: List[EmailItem], title: str = "이메일 수집 �
 # 테스트 실행
 if __name__ == "__main__":
     print("=== 이메일 추출 모듈 테스트 ===")
-    print("실제 테스트를 위해서는 계정 정보를 설정하세요.")
-    print("예시:")
-    print("  extractor = EmailExtractor(provider='naver', username='your@naver.com', password='앱비밀번호')")
-    print("  with extractor:")
-    print("      emails = extractor.extract_emails(days_back=7, max_emails=20)")
-    print("      md = emails_to_markdown(emails)")
+    print("config/user_config.json의 email 설정을 사용합니다.")
+    email_cfg = EmailExtractor.load_email_config()
+    extractor = EmailExtractor.from_user_config()
+
+    folders = email_cfg.get("folders", ["INBOX"])
+    days_back = int(email_cfg.get("days_back", 7))
+    max_emails = int(email_cfg.get("max_emails", 20))
+    filter_keywords = email_cfg.get("filter_keywords", [])
+    exclude_senders = email_cfg.get("exclude_senders", [])
+
+    with extractor:
+        emails = extractor.extract_emails(
+            folders=folders,
+            days_back=days_back,
+            max_emails=max_emails,
+            filter_keywords=filter_keywords,
+            exclude_senders=exclude_senders
+        )
+        md = emails_to_markdown(emails)
+        print(md)
