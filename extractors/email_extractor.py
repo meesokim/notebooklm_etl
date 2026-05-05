@@ -11,6 +11,7 @@ import email.message
 import re
 import html
 import json
+import keyring
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -125,6 +126,16 @@ class EmailExtractor:
         provider = email_cfg.get("provider", "naver")
         username = email_cfg.get("username", "")
         password = email_cfg.get("password", "")
+        
+        # 비밀번호가 비어있다면 보안 저장소(Keyring)에서 시도
+        if username and not password:
+            try:
+                stored_pwd = keyring.get_password("notebooklm_etl", username)
+                if stored_pwd:
+                    password = stored_pwd
+            except Exception:
+                pass
+
         custom_server = email_cfg.get("imap_server")
         custom_port = int(email_cfg.get("imap_port", 993))
 
@@ -142,21 +153,34 @@ class EmailExtractor:
 
     def connect(self) -> bool:
         """IMAP 서버에 연결 및 로그인."""
+        if not self.username or not self.password:
+            logger.error("이메일 계정 정보(사용자명 또는 비밀번호)가 설정되지 않았습니다.")
+            return False
+            
         try:
+            logger.info(f"IMAP 서버 접속 중: {self.server}:{self.port}")
             self.connection = imaplib.IMAP4_SSL(self.server, self.port)
+            
+            logger.info(f"로그인 시도 중: {self.username}")
             self.connection.login(self.username, self.password)
+            
             self.is_authenticated = True
             logger.info(f"IMAP 연결 성공: {self.username}")
             return True
         except imaplib.IMAP4.error as e:
-            logger.error(f"IMAP 로그인 실패: {e}")
-            if self.provider == "naver":
-                logger.error("네이버 메일 웹 설정에서 IMAP/SMTP 사용을 활성화했는지 확인하세요.")
-            self.disconnect()
+            err_msg = str(e)
+            logger.error(f"IMAP 로그인 실패: {err_msg}")
+            
+            if "Invalid arguments" in err_msg:
+                logger.error("  -> 사용자명이나 비밀번호 형식이 잘못되었습니다. 특수문자가 포함된 경우 앱 비밀번호 사용을 권장합니다.")
+            elif "authentication failed" in err_msg.lower():
+                logger.error("  -> 아이디 또는 비밀번호(앱 비밀번호)를 다시 확인하세요.")
+                
+            if self.provider == 'naver':
+                logger.error("  -> 네이버 메일 설정 > IMAP/SMTP 설정에서 '사용함'으로 되어있는지 확인하세요.")
             return False
         except Exception as e:
             logger.error(f"IMAP 연결 오류: {e}")
-            self.disconnect()
             return False
 
     def disconnect(self) -> None:
@@ -487,7 +511,7 @@ if __name__ == "__main__":
     print("config/user_config.json의 email 설정을 사용합니다.")
     email_cfg = EmailExtractor.load_email_config()
     extractor = EmailExtractor.from_user_config()
-
+    print(email_cfg)
     folders = email_cfg.get("folders", ["INBOX"])
     days_back = int(email_cfg.get("days_back", 7))
     max_emails = int(email_cfg.get("max_emails", 20))

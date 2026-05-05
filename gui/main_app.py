@@ -1136,8 +1136,76 @@ class NotebookLMETLApp:
 
     def run_partial_sync(self, source_type: str):
         """특정 소스 타입만 동기화합니다."""
+        if self._is_syncing:
+            messagebox.showwarning("작업 중", "이미 동기화가 진행 중입니다.")
+            return
+
         logger.info(f"{source_type} 부분 동기화 시작...")
         self.status_bar.set_status(f"{source_type} 동기화 중...")
+        
+        # 백그라운드 스레드에서 실행
+        thread = threading.Thread(
+            target=lambda: asyncio.run(self._run_partial_sync_async(source_type)),
+            daemon=True
+        )
+        thread.start()
+
+    async def _run_partial_sync_async(self, source_type: str):
+        """부분 동기화 비동기 작업 코어"""
+        self._is_syncing = True
+        try:
+            settings = self.settings_manager.get()
+            contents = []
+
+            if source_type == "email":
+                from extractors.email_extractor import EmailExtractor
+                with EmailExtractor.from_user_config() as extractor:
+                    contents = extractor.extract_emails(
+                        days_back=settings.email.days_back,
+                        max_emails=settings.email.max_emails,
+                        filter_keywords=settings.email.filter_keywords
+                    )
+            elif source_type == "browser":
+                from extractors.browser_extractor import BrowserHistoryExtractor
+                extractor = BrowserHistoryExtractor(browsers=settings.browser.browsers)
+                contents = extractor.extract(
+                    days_back=settings.browser.days_back,
+                    min_visit_count=settings.browser.min_visit_count
+                )
+            # ... 다른 타입들도 유사하게 추가 가능
+
+            if not contents:
+                logger.info(f"ℹ️ {source_type}: 수집된 새로운 데이터가 없습니다.")
+                return
+
+            # 데이터 처리 및 업로드 (공통 로직 활용)
+            from transformers.filter_engine import ETLPipeline
+            pipeline = ETLPipeline(settings)
+            
+            if source_type == "email":
+                processed = pipeline.process_emails(contents)
+            elif source_type == "browser":
+                processed = pipeline.process_browser_history(contents)
+            else:
+                processed = []
+
+            if processed:
+                saved_files = pipeline.save_all(processed, f"partial_{source_type}")
+                
+                # NotebookLM 업로드
+                if settings.notebooklm.target_notebooks:
+                    from loaders.notebooklm_manager import ETLOrchestrator
+                    orchestrator = ETLOrchestrator(settings)
+                    for nb_name, nb_id in settings.notebooklm.target_notebooks.items():
+                        await orchestrator.run_full_pipeline(nb_id, nb_name, saved_files)
+                
+                logger.info(f"✨ {source_type} 동기화 완료!")
+            
+        except Exception as e:
+            logger.error(f"❌ {source_type} 동기화 중 오류: {e}")
+        finally:
+            self._is_syncing = False
+            self.root.after(0, lambda: self.status_bar.set_status("준비"))
 
     def cleanup_old_sources(self):
         """오래된 소스를 정리합니다."""
@@ -1178,8 +1246,8 @@ class NotebookLMETLApp:
             image = Image.new('RGB', (64, 64), COLORS["primary"])
 
         menu = (
-            pystray.item('열기', self._show_window),
-            pystray.item('종료', self._exit_app)
+            pystray.MenuItem('열기', self._show_window),
+            pystray.MenuItem('종료', self._exit_app)
         )
         self._tray_icon = pystray.Icon("notebooklm_etl", image, "NotebookLM ETL", menu)
         threading.Thread(target=self._tray_icon.run, daemon=True).start()
