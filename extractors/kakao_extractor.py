@@ -175,7 +175,7 @@ class KakaoTalkExtractor:
 
         # 1) kakaotalk.py의 안정화된 내보내기 경로 사용
         try:
-            from kakaotalk import extract_messages_from_chatroom
+            import kakaotalk
             logger.info("카카오톡 내보내기 자동화 경로를 사용합니다. (kakaotalk.py)")
 
             for room_name in target_rooms:
@@ -186,44 +186,45 @@ class KakaoTalkExtractor:
                 logger.info(f"채팅방 '{room_name}' 내보내기/파싱 시작... (남은 한도: {remaining})")
 
                 try:
-                    exported_file = extract_messages_from_chatroom(room_name)
-                    if not exported_file:
-                        logger.warning(f"채팅방 '{room_name}' 내보내기 파일 경로를 얻지 못했습니다.")
+                    # kakaotalk.py의 기능을 직접 호출하여 파일로 내보내기
+                    exported_file = kakaotalk.extract_messages_from_chatroom(room_name)
+                    if not exported_file or not os.path.exists(exported_file):
+                        logger.warning(f"채팅방 '{room_name}' 내보내기 실패")
                         continue
 
                     room_messages = self.extract_from_export_file(
                         exported_file,
                         max_messages=remaining
                     )
-                    if not room_messages:
-                        logger.warning(f"채팅방 '{room_name}' 파싱 결과가 비어 있습니다.")
-                        continue
-
-                    for m in room_messages:
-                        m.room_name = room_name
-                    messages.extend(room_messages)
-                    logger.info(f"채팅방 '{room_name}' 추출 완료: {len(room_messages)}개")
+                    
+                    if room_messages:
+                        for m in room_messages:
+                            m.room_name = room_name
+                        messages.extend(room_messages)
+                        logger.info(f"채팅방 '{room_name}' 추출 완료: {len(room_messages)}개")
                 except Exception as e:
                     logger.warning(f"채팅방 '{room_name}' 내보내기 기반 추출 실패: {e}")
 
             if messages:
                 logger.info(f"카카오톡 추출 완료(내보내기 경로): 총 {len(messages)}개")
                 return messages[:max_messages]
-            logger.warning("내보내기 경로에서 메시지를 얻지 못해 pywinauto 폴백을 시도합니다.")
 
+        except ImportError:
+            logger.warning("kakaotalk.py 모듈을 찾을 수 없습니다. pywinauto 폴백을 시도합니다.")
         except Exception as e:
-            logger.warning(f"kakaotalk.py 경로 사용 실패, pywinauto 폴백 시도: {e}")
+            logger.warning(f"kakaotalk.py 경로 사용 중 오류: {e}")
 
-        # 2) 기존 pywinauto 방식 폴백
+        # 2) 클립보드 폴백 (kakaotalk.py 및 pywinauto 기반)
         try:
+            logger.info("클립보드 복사 방식을 시도합니다.")
             import pywinauto
             from pywinauto import Application
-
+            
             try:
-                app = Application(backend='uia').connect(title_re="카카오톡.*", timeout=5)
+                app = Application(backend='uia').connect(title="카카오톡", timeout=5)
             except Exception:
-                logger.warning("카카오톡이 실행 중이지 않습니다.")
-                return []
+                logger.warning("카카오톡이 실행 중이지 않거나 찾을 수 없습니다.")
+                return messages
 
             for room_name in target_rooms:
                 if len(messages) >= max_messages:
@@ -234,12 +235,88 @@ class KakaoTalkExtractor:
 
             return messages[:max_messages]
 
-        except ImportError:
-            logger.error("pywinauto가 설치되지 않았습니다. 'pip install pywinauto'를 실행하세요.")
-            return messages[:max_messages]
         except Exception as e:
-            logger.error(f"UI 자동화 오류: {e}")
+            logger.error(f"UI 자동화 폴백 오류: {e}")
             return messages[:max_messages]
+
+    def get_room_list(self) -> List[str]:
+        """
+        카카오톡 프로세스의 모든 창을 뒤져서 채팅방 목록을 찾아냅니다.
+        """
+        if not self._is_windows:
+            return []
+            
+        import pywinauto
+        from pywinauto import Application
+        import re
+
+        rooms = set()
+        
+        try:
+            # 1) 프로세스에 연결
+            try:
+                app = Application(backend='uia').connect(path="KakaoTalk.exe", timeout=3)
+            except Exception:
+                logger.warning("카카오톡 프로세스를 찾을 수 없습니다.")
+                return []
+
+            # 2) 모든 창 순회
+            for win in app.windows():
+                try:
+                    if not win.is_visible():
+                        continue
+                    
+                    # 창 제목이 '카카오톡'이거나 빈 경우(메인 리스트 창일 확률 높음)
+                    win_text = win.window_text()
+                    
+                    # 3) ListItem 검색
+                    items = win.descendants(control_type="ListItem")
+                    if not items:
+                        continue
+                        
+                    logger.info(f"창 '{win_text or 'Untitled'}'에서 {len(items)}개의 항목 탐색 중...")
+                    
+                    for item in items:
+                        try:
+                            # 다양한 속성에서 이름 추출 시도
+                            name = ""
+                            
+                            # (1) 기본 텍스트
+                            name = item.window_text().strip()
+                            
+                            # (2) 속성 딕셔너리에서 시도 (UIA 전용)
+                            if not name or len(name) <= 1:
+                                try:
+                                    props = item.get_properties()
+                                    name = props.get("texts", [""])[0].strip() or props.get("name", "").strip()
+                                except Exception:
+                                    pass
+                            
+                            # (3) 자식 요소에서 시도
+                            if not name or len(name) <= 1:
+                                for child in item.children():
+                                    c_name = child.window_text().strip()
+                                    if c_name and len(c_name) > 1:
+                                        if not re.match(r'^\d+:\d+$', c_name) and not re.match(r'^\d+$', c_name):
+                                            name = c_name
+                                            break
+                            
+                            # 필터링 및 추가
+                            if name and len(name) > 1:
+                                if not any(ex in name for ex in ["최소화", "최대화", "닫기", "광고", "MOMENT"]):
+                                    if not re.match(r'^\d+:\d+$', name) and not re.match(r'^\d+$', name):
+                                        if name not in ["채팅", "친구", "더보기", "검색"]:
+                                            rooms.add(name)
+                        except Exception:
+                            continue
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.warning(f"목록 추출 중 오류: {e}")
+
+        result = sorted(list(rooms))
+        logger.info(f"최종 추출된 채팅방 수: {len(result)}")
+        return result
 
     def _extract_from_room(self, app, room_name: str, max_messages: int) -> List[KakaoMessage]:
         """특정 채팅방에서 메시지를 추출합니다."""
@@ -390,6 +467,16 @@ def kakao_messages_to_markdown(
 if __name__ == "__main__":
     print("=== 카카오톡 추출 모듈 테스트 ===")
     extractor = KakaoTalkExtractor()
+
+    if len(sys.argv) > 1 and sys.argv[1] == "list":
+        print("채팅방 목록을 가져옵니다 (카카오톡 채팅 탭이 열려있어야 합니다)...")
+        rooms = extractor.get_room_list()
+        if not rooms:
+            print("채팅방 목록을 찾을 수 없거나 카카오톡이 실행 중이 아닙니다.")
+        else:
+            for i, room in enumerate(rooms, 1):
+                print(f"{i}. {room}")
+        sys.exit(0)
 
     # 내보내기 파일 테스트
     print("카카오톡 대화 내보내기 파일 파싱 테스트")

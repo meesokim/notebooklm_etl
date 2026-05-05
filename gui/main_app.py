@@ -1172,7 +1172,24 @@ class NotebookLMETLApp:
                     days_back=settings.browser.days_back,
                     min_visit_count=settings.browser.min_visit_count
                 )
-            # ... 다른 타입들도 유사하게 추가 가능
+            elif source_type == "kakao":
+                from extractors.kakao_extractor import KakaoTalkExtractor
+                extractor = KakaoTalkExtractor()
+                contents = extractor.extract_via_ui_automation(
+                    target_rooms=settings.kakao.target_rooms,
+                    max_messages=settings.kakao.max_messages
+                )
+            elif source_type == "naver_cafe":
+                from extractors.web_scraper import NaverCafeScraper
+                scraper = NaverCafeScraper()
+                for url in settings.naver_cafe.cafe_urls:
+                    posts = scraper.scrape_cafe_posts(
+                        url,
+                        keywords=settings.naver_cafe.keywords,
+                        max_posts=settings.naver_cafe.max_posts
+                    )
+                    contents.extend(posts)
+                scraper.close()
 
             if not contents:
                 logger.info(f"ℹ️ {source_type}: 수집된 새로운 데이터가 없습니다.")
@@ -1186,6 +1203,10 @@ class NotebookLMETLApp:
                 processed = pipeline.process_emails(contents)
             elif source_type == "browser":
                 processed = pipeline.process_browser_history(contents)
+            elif source_type == "kakao":
+                processed = pipeline.process_kakao_messages(contents)
+            elif source_type == "naver_cafe":
+                processed = pipeline.process_web_contents(contents)
             else:
                 processed = []
 
