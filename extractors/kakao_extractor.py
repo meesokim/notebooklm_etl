@@ -259,7 +259,7 @@ class KakaoTalkExtractor:
             except Exception:
                 logger.warning("카카오톡 프로세스를 찾을 수 없습니다.")
                 return []
-
+            
             # 2) 모든 창 순회
             for win in app.windows():
                 try:
@@ -312,75 +312,72 @@ class KakaoTalkExtractor:
                 except Exception:
                     continue
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             logger.warning(f"목록 추출 중 오류: {e}")
 
         result = sorted(list(rooms))
         logger.info(f"최종 추출된 채팅방 수: {len(result)}")
         return result
 
-    def _extract_from_room(self, app, room_name: str, max_messages: int) -> List[KakaoMessage]:
+    def _extract_from_room(self, room_name: str, max_messages: int) -> List[KakaoMessage]:
         """특정 채팅방에서 메시지를 추출합니다."""
         messages = []
         try:
-            # 채팅방 찾기 및 클릭
-            main_window = app.top_window()
+            from kakaotalk import open_chatroom, PostKeyEx, _get_clipboard_text, close_chatroom_window
+            import win32gui
+            import win32con as w
+            import re
+            from datetime import datetime
 
-            # 검색창에 채팅방 이름 입력
-            search_box = main_window.child_window(control_type="Edit", found_index=0)
-            search_box.set_text(room_name)
-            time.sleep(0.5)
+            hwnd_chatroom = open_chatroom(room_name)
+            if not hwnd_chatroom:
+                logger.warning(f"채팅방 '{room_name}'을 열 수 없습니다.")
+                return messages
 
-            # 검색 결과에서 채팅방 선택
-            room_item = main_window.child_window(title=room_name, control_type="ListItem")
-            room_item.double_click_input()
+            time.sleep(1)
+            hwndListControl = win32gui.FindWindowEx(hwnd_chatroom, None, "EVA_VH_ListControl_Dblclk", None)
+            if not hwndListControl:
+                logger.warning("채팅방 리스트 컨트롤을 찾을 수 없습니다.")
+                close_chatroom_window(hwnd_chatroom)
+                return messages
+
+            PostKeyEx(hwndListControl, ord('A'), [w.VK_CONTROL], False)
+            time.sleep(1)
+            PostKeyEx(hwndListControl, ord('C'), [w.VK_CONTROL], False)
             time.sleep(1)
 
-            # 채팅창에서 텍스트 추출
-            chat_window = app.window(title_re=f".*{room_name}.*")
-            if chat_window.exists():
-                # 전체 선택 및 복사
-                chat_window.set_focus()
-                chat_window.type_keys('^a^c')  # ^a(전체선택) 후 ^c(복사)
-                time.sleep(1.0)  # 클립보드 복사 대기 시간 증가
+            clipboard_text = _get_clipboard_text()
+            
+            close_chatroom_window(hwnd_chatroom)
 
-                # pywinauto 내장 클립보드 기능 사용 (더 안정적)
-                try:
-                    import pywinauto.clipboard
-                    clipboard_text = pywinauto.clipboard.GetData()
-                except Exception as e:
-                    logger.warning(f"클립보드 데이터 읽기 실패: {e}")
-                    clipboard_text = ""
+            # 텍스트 파싱
+            if clipboard_text:
+                current_sender = "알 수 없음"
+                for line in clipboard_text.split('\n'):
+                    line = line.strip()
+                    if not line: continue
+                    
+                    match = re.match(r'^\[(.+?)\] \[(오전|오후) \d{1,2}:\d{2}\] (.+)$', line)
+                    if match:
+                        current_sender = match.group(1)
+                        message_text = match.group(3)
+                    else:
+                        message_text = line
 
-                # 텍스트 파싱
-                if clipboard_text:
-                    # 카카오톡 복사 텍스트 형식 파싱 (날짜, 시간, 발신자, 메시지 분리 시도)
-                    current_sender = "알 수 없음"
-                    for line in clipboard_text.split('\n'):
-                        line = line.strip()
-                        if not line: continue
-                        
-                        # [발신자] [오후 12:00] 메시지 형태인 경우
-                        match = re.match(r'^\[(.+?)\] \[(오전|오후) \d{1,2}:\d{2}\] (.+)$', line)
-                        if match:
-                            current_sender = match.group(1)
-                            message_text = match.group(3)
-                        else:
-                            message_text = line
+                    links = re.findall(r'https?://[^\s]+', message_text)
 
-                        # 링크 추출
-                        links = re.findall(r'https?://[^\s]+', message_text)
-
-                        messages.append(KakaoMessage(
-                            room_name=room_name,
-                            sender=current_sender,
-                            message=message_text,
-                            timestamp=datetime.now().strftime('%Y-%m-%d %H:%M'),
-                            links=links,
-                            message_type="link" if links else "text"
-                        ))
-                        
-                        if len(messages) >= max_messages:
-                            break
+                    messages.append(KakaoMessage(
+                        room_name=room_name,
+                        sender=current_sender,
+                        message=message_text,
+                        timestamp=datetime.now().strftime('%Y-%m-%d %H:%M'),
+                        links=links,
+                        message_type="link" if links else "text"
+                    ))
+                    
+                    if len(messages) >= max_messages:
+                        break
 
         except Exception as e:
             logger.warning(f"채팅방 '{room_name}' 추출 실패: {e}")
