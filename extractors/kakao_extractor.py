@@ -8,10 +8,12 @@ pywinauto 또는 pyautogui를 사용하여 UI 자동화를 수행합니다.
 
 import os
 import re
+import subprocess
 import time
+import json
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Union
 from dataclasses import dataclass, field
 
 import sys
@@ -45,8 +47,161 @@ class KakaoTalkExtractor:
 
     def __init__(self):
         self._is_windows = sys.platform == "win32"
-        logger.info(f"KakaoTalkExtractor 초기화 (Windows: {self._is_windows})")
+        self._is_wsl = self._check_is_wsl()
+        logger.info(f"KakaoTalkExtractor 초기화 (Windows: {self._is_windows}, WSL: {self._is_wsl})")
+        self._config = self._load_kakao_config()
 
+    def _load_kakao_config(self) -> Dict:
+        """user_config.json에서 kakao 설정을 로드."""
+        default_path = Path(__file__).parent.parent / "config" / "user_config.json"
+        try:
+            with open(default_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            kakao_cfg = data.get("kakao", {})
+            if not isinstance(kakao_cfg, dict):
+                return {}
+            return kakao_cfg
+        except FileNotFoundError:
+            logger.debug(f"카카오톡 설정 파일 없음: {default_path}")
+            return {}
+        except Exception as e:
+            logger.error(f"카카오톡 설정 로드 실패: {default_path} ({e})")
+            return {}
+
+    def _check_is_wsl(self) -> bool:
+        """Check if running inside Windows Subsystem for Linux."""
+        if sys.platform != 'linux':
+            return False
+        try:
+            # A common way to check for WSL is to check for 'Microsoft' in /proc/version
+            with open('/proc/version', 'r') as f:
+                if 'microsoft' in f.read().lower():
+                    logger.info("WSL 환경 감지됨.")
+                    return True
+        except FileNotFoundError:
+            pass
+        # Another check for WSL2
+        if 'WSL_DISTRO_NAME' in os.environ:
+            logger.info("WSL 환경 감지됨 (WSL_DISTRO_NAME).")
+            return True
+        return False
+
+    def _find_windows_python(self) -> Optional[str]:
+        """
+        WSL에서 Windows 호스트의 python.exe 인터프리터를 찾습니다.
+        1. 설정 파일(user_config.json)의 'kakao.windows_python_path'를 확인합니다.
+        2. 설정이 없으면 일반적인 경로에서 자동으로 탐색합니다.
+        """
+        # 1. 설정 파일에서 경로 확인
+        config_path = self._config.get("windows_python_path")
+        if config_path:
+            # Windows 경로(C:\...)를 WSL 경로(/mnt/c/...)로 변환
+            try:
+                if ':/' in config_path or ':\\' in config_path:
+                    p = Path(config_path.replace('\\', '/'))
+                    drive = p.drive.lower().replace(':', '')
+                    wsl_path = Path(f"/mnt/{drive}") / p.relative_to(p.anchor)
+                else: # 이미 WSL 경로 형식이라고 가정
+                    wsl_path = Path(config_path)
+
+                if wsl_path.exists() and wsl_path.is_file():
+                    logger.info(f"설정 파일에서 Windows Python 경로를 사용합니다: {wsl_path}")
+                    return str(wsl_path)
+                else:
+                    logger.warning(f"설정에 지정된 Windows Python 경로를 찾을 수 없습니다: {wsl_path}")
+            except Exception as e:
+                logger.warning(f"설정된 Python 경로 처리 중 오류 발생 ('{config_path}'): {e}")
+
+        # 2. 자동 탐색 (기존 로직)
+        logger.info("user_config.json에 경로가 지정되지 않아 Windows Python 자동 탐색을 시작합니다.")
+        try:
+            users_dir = Path("/mnt/c/Users")
+            if not users_dir.exists():
+                return None
+
+            for user_dir in users_dir.iterdir():
+                if not user_dir.is_dir():
+                    continue
+                
+                appdata_local = user_dir / "AppData" / "Local" / "Programs" / "Python"
+                if not appdata_local.exists():
+                    continue
+
+                # Find the latest Python version directory
+                py_versions = sorted([d for d in appdata_local.iterdir() if d.is_dir() and d.name.startswith("Python")], reverse=True)
+                if not py_versions:
+                    continue
+
+                for py_dir in py_versions:
+                    py_exe = py_dir / "python.exe"
+                    if py_exe.exists():
+                        logger.info(f"Found Windows Python at: {py_exe}")
+                        return str(py_exe)
+        except Exception as e:
+            logger.warning(f"Could not automatically find Windows Python: {e}")
+        
+        return None
+
+    def _run_wsl_helper(self, args: List[str]) -> Optional[Union[Dict, List]]:
+        """Generic helper to run this script on Windows via WSL."""
+        logger.info(f"WSL 환경에서 Windows Helper 실행: {args}")
+        
+        win_python = self._find_windows_python()
+        if not win_python:
+            logger.error("WSL에서 Windows의 Python 인터프리터를 찾을 수 없습니다. 자동 추출이 불가능합니다.")
+            return None
+            
+        try:
+            helper_script_path = Path(__file__).resolve()
+            proc = subprocess.run(['wslpath', '-w', str(helper_script_path)], capture_output=True, text=True, check=True)
+            win_script_path = proc.stdout.strip()
+        except (FileNotFoundError, subprocess.CalledProcessError) as e:
+            logger.error(f"'wslpath' 명령어 실행 실패. WSL 경로를 Windows 경로로 변환할 수 없습니다: {e}")
+            logger.error("대안: 프로젝트를 Windows 파일 시스템(예: /mnt/c/...)에 위치시키세요.")
+            return None
+
+        cmd = [win_python, win_script_path] + args
+        
+        logger.info(f"Helper 실행 명령어: {' '.join(cmd)}")
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, encoding='utf-8', timeout=300)
+            output = result.stdout
+            if not output:
+                logger.warning("Windows helper에서 출력이 없습니다.")
+                if result.stderr:
+                    logger.error(f"Helper 오류 출력: {result.stderr}")
+                return None
+
+            # Extract JSON between delimiters to avoid pollution from other libraries
+            start_marker = "---JSON-START---"
+            end_marker = "---JSON-END---"
+            
+            start_index = output.find(start_marker)
+            end_index = output.find(end_marker)
+            
+            if start_index != -1 and end_index > start_index:
+                json_str = output[start_index + len(start_marker):end_index].strip()
+            else:
+                logger.warning("WSL helper 출력에서 JSON 구분자를 찾을 수 없습니다. 전체 출력을 파싱합니다.")
+                json_str = output.strip()
+
+            if not json_str:
+                logger.warning("Windows helper에서 파싱할 JSON 출력이 없습니다.")
+                return None
+
+            data = json.loads(json_str)
+
+            if isinstance(data, dict) and "error" in data:
+                logger.error(f"Windows helper 실행 오류: {data['error']}")
+                return None
+            
+            return data
+
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, Exception) as e:
+            logger.error(f"WSL helper 실행 중 예외 발생: {e}")
+            return None
+            
     def extract_from_export_file(
         self,
         file_path: str,
@@ -158,6 +313,7 @@ class KakaoTalkExtractor:
         """
         Windows UI 자동화를 통해 카카오톡 PC에서 실시간으로 채팅 내용을 추출합니다.
         카카오톡이 실행 중이어야 합니다.
+        WSL 환경에서는 Windows의 Python을 호출하여 실행을 시도합니다.
 
         Args:
             target_rooms: 수집할 채팅방 이름 목록
@@ -166,10 +322,27 @@ class KakaoTalkExtractor:
         Returns:
             추출된 KakaoMessage 목록
         """
-        if not self._is_windows:
-            logger.warning("UI 자동화는 Windows 환경에서만 지원됩니다.")
+        if not self._is_windows and not self._is_wsl:
+            logger.warning("UI 자동화는 Windows 또는 WSL 환경에서만 지원됩니다.")
             return []
 
+        if self._is_wsl:
+            target_rooms = target_rooms or ["나에게 쓰기"]
+            rooms_str = ",".join(target_rooms)
+            args = [
+                "--as-wsl-helper",
+                "--rooms", rooms_str,
+                "--max-messages", str(max_messages)
+            ]
+            data = self._run_wsl_helper(args)
+            
+            if isinstance(data, list):
+                messages = [KakaoMessage(**item) for item in data]
+                logger.info(f"WSL Helper를 통해 {len(messages)}개의 메시지를 성공적으로 추출했습니다.")
+                return messages
+            return []
+
+        # --- 기존 Windows 전용 로직 ---
         target_rooms = target_rooms or ["나에게 쓰기"]
         messages: List[KakaoMessage] = []
 
@@ -239,86 +412,134 @@ class KakaoTalkExtractor:
             logger.error(f"UI 자동화 폴백 오류: {e}")
             return messages[:max_messages]
 
-    def get_room_list(self) -> List[str]:
+    def get_room_list(self, max_rooms: int = 300) -> List[str]:
         """
-        카카오톡 프로세스의 모든 창을 뒤져서 채팅방 목록을 찾아냅니다.
+        카카오톡 PC 버전의 채팅 목록을 가져옵니다.
+        채팅 목록을 활성화하고 키보드 네비게이션(아래 화살표 + Enter)으로
+        순차적으로 채팅방을 열고 닫으면서 제목을 추출합니다. (가장 확실한 방법)
+        WSL 환경에서는 Windows Helper를 통해 목록을 가져옵니다.
         """
-        if not self._is_windows:
+        if not self._is_windows and not self._is_wsl:
+            logger.warning("채팅방 목록 가져오기는 Windows 또는 WSL 환경에서만 지원됩니다.")
             return []
-            
-        import pywinauto
-        from pywinauto import Application
-        import re
+ 
+        if self._is_wsl:
+            args = ["--list-rooms-helper"]
+            data = self._run_wsl_helper(args)
+            if isinstance(data, list):
+                logger.info(f"WSL Helper를 통해 {len(data)}개의 채팅방 목록을 가져왔습니다.")
+                return data
+            return []
+ 
+        import win32gui
+        import win32api
+        import win32con
+        import time
 
-        rooms = set()
-        
+        rooms = []
         try:
-            # 1) 프로세스에 연결
-            try:
-                app = Application(backend='uia').connect(path="KakaoTalk.exe", timeout=3)
-            except Exception:
-                logger.warning("카카오톡 프로세스를 찾을 수 없습니다.")
+            hwndkakao = win32gui.FindWindow(None, "카카오톡")
+            if not hwndkakao:
+                logger.warning("카카오톡 프로세스를 찾을 수 없습니다. 카카오톡이 실행 중인지 확인하세요.")
                 return []
-            
-            # 2) 모든 창 순회
-            for win in app.windows():
-                try:
-                    if not win.is_visible():
-                        continue
-                    
-                    # 창 제목이 '카카오톡'이거나 빈 경우(메인 리스트 창일 확률 높음)
-                    win_text = win.window_text()
-                    
-                    # 3) ListItem 검색
-                    items = win.descendants(control_type="ListItem")
-                    if not items:
-                        continue
+
+            # 헬퍼 함수
+            def _send_hotkey(hwnd, mod_vk, key_vk, pre_delay=0.05, gap=0.03):
+                if hwnd and win32gui.IsWindow(hwnd):
+                    try:
+                        win32gui.SetForegroundWindow(hwnd)
+                        win32gui.BringWindowToTop(hwnd)
+                    except Exception:
+                        pass
+                time.sleep(pre_delay)
+                ku = win32con.KEYEVENTF_KEYUP
+                if mod_vk:
+                    win32api.keybd_event(mod_vk, 0, 0, 0)
+                    time.sleep(gap)
+                win32api.keybd_event(key_vk, 0, 0, 0)
+                time.sleep(gap)
+                win32api.keybd_event(key_vk, 0, ku, 0)
+                time.sleep(gap)
+                if mod_vk:
+                    win32api.keybd_event(mod_vk, 0, ku, 0)
+
+            # 카카오톡을 맨 앞으로
+            try:
+                win32gui.SetForegroundWindow(hwndkakao)
+                win32gui.BringWindowToTop(hwndkakao)
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+            # Ctrl+2 로 채팅 탭으로 이동
+            _send_hotkey(hwndkakao, win32con.VK_CONTROL, ord('2'))
+            time.sleep(0.5)
+
+            # 채팅 목록 부분을 클릭해서 포커스
+            rect = win32gui.GetWindowRect(hwndkakao)
+            x = rect[0] + (rect[2] - rect[0]) // 2
+            y = rect[1] + 150 # 대략 첫번째 채팅방 위치
+            win32api.SetCursorPos((x, y))
+            time.sleep(0.1)
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+            time.sleep(0.05)
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            time.sleep(0.5)
+
+            # Home 키를 눌러 최상단으로 이동
+            _send_hotkey(hwndkakao, None, win32con.VK_HOME)
+            time.sleep(0.5)
+
+            seen_titles = set()
+            consecutive_duplicates = 0
+
+            logger.info("키보드 네비게이션으로 채팅방 목록 추출을 시작합니다...")
+            for i in range(max_rooms):
+                # Enter 를 눌러 채팅방 열기
+                _send_hotkey(hwndkakao, None, win32con.VK_RETURN)
+                time.sleep(0.8) # 창이 열리는데 필요한 대기 시간
+                
+                fg = win32gui.GetForegroundWindow()
+                title = win32gui.GetWindowText(fg)
+                
+                # 열린 창이 카카오톡 메인 창이 아니고, 이름이 유효한 경우
+                if fg != hwndkakao and title and title != "카카오톡":
+                    if title not in seen_titles:
+                        rooms.append(title)
+                        seen_titles.add(title)
+                        consecutive_duplicates = 0
+                        logger.debug(f"채팅방 발견: {title}")
+                    else:
+                        consecutive_duplicates += 1
                         
-                    logger.info(f"창 '{win_text or 'Untitled'}'에서 {len(items)}개의 항목 탐색 중...")
+                    # 채팅방 창 닫기 (Esc 또는 Alt+F4)
+                    win32gui.PostMessage(fg, win32con.WM_CLOSE, 0, 0)
+                    time.sleep(0.3)
                     
-                    for item in items:
-                        try:
-                            # 다양한 속성에서 이름 추출 시도
-                            name = ""
-                            
-                            # (1) 기본 텍스트
-                            name = item.window_text().strip()
-                            
-                            # (2) 속성 딕셔너리에서 시도 (UIA 전용)
-                            if not name or len(name) <= 1:
-                                try:
-                                    props = item.get_properties()
-                                    name = props.get("texts", [""])[0].strip() or props.get("name", "").strip()
-                                except Exception:
-                                    pass
-                            
-                            # (3) 자식 요소에서 시도
-                            if not name or len(name) <= 1:
-                                for child in item.children():
-                                    c_name = child.window_text().strip()
-                                    if c_name and len(c_name) > 1:
-                                        if not re.match(r'^\d+:\d+$', c_name) and not re.match(r'^\d+$', c_name):
-                                            name = c_name
-                                            break
-                            
-                            # 필터링 및 추가
-                            if name and len(name) > 1:
-                                if not any(ex in name for ex in ["최소화", "최대화", "닫기", "광고", "MOMENT"]):
-                                    if not re.match(r'^\d+:\d+$', name) and not re.match(r'^\d+$', name):
-                                        if name not in ["채팅", "친구", "더보기", "검색"]:
-                                            rooms.add(name)
-                        except Exception:
-                            continue
+                # 메인 창으로 돌아와서 아래 화살표(Down) 누르기
+                try:
+                    win32gui.SetForegroundWindow(hwndkakao)
                 except Exception:
-                    continue
+                    pass
+                _send_hotkey(hwndkakao, None, win32con.VK_DOWN)
+                time.sleep(0.3)
+
+                # 만약 같은 방이 연속으로 3번 나오면 더 이상 방이 없는 것으로 간주
+                if consecutive_duplicates >= 3:
+                    break
+
         except Exception as e:
+            logger.error(f"채팅방 목록 추출 중 오류 발생: {e}")
             import traceback
             traceback.print_exc()
-            logger.warning(f"목록 추출 중 오류: {e}")
 
-        result = sorted(list(rooms))
-        logger.info(f"최종 추출된 채팅방 수: {len(result)}")
-        return result
+        # 만약 목록을 아예 못 가져왔다면 기본값 세팅
+        if not rooms:
+            logger.warning("채팅방을 가져오지 못했습니다. '나에게 쓰기'를 기본으로 추가합니다.")
+            rooms.append("나에게 쓰기")
+
+        logger.info(f"추출된 채팅방 목록 ({len(rooms)}개): {rooms[:5]}...")
+        return rooms
 
     def _extract_from_room(self, room_name: str, max_messages: int) -> List[KakaoMessage]:
         """특정 채팅방에서 메시지를 추출합니다."""
@@ -462,10 +683,50 @@ def kakao_messages_to_markdown(
 
 # 테스트 실행
 if __name__ == "__main__":
-    print("=== 카카오톡 추출 모듈 테스트 ===")
-    extractor = KakaoTalkExtractor()
+    import argparse
+    import json
+    from dataclasses import asdict
 
-    if len(sys.argv) > 1 and sys.argv[1] == "list":
+    parser = argparse.ArgumentParser(description="KakaoTalk Extractor Module & Helper")
+    parser.add_argument("--as-wsl-helper", action="store_true", help="Run as a message extraction helper for WSL.")
+    parser.add_argument("--list-rooms-helper", action="store_true", help="Run as a room list helper for WSL.")
+    parser.add_argument("--rooms", type=str, help="Comma-separated list of target room names for helper.")
+    parser.add_argument("--max-messages", type=int, default=100, help="Max messages to extract for helper.")
+    parser.add_argument("--test-list-rooms", action="store_true", help="Interactively test listing chat rooms.")
+
+    args = parser.parse_args()
+
+    # This part only runs on Windows when called as a helper
+    if sys.platform == "win32":
+        if args.as_wsl_helper:
+            if not args.rooms:
+                print(json.dumps({"error": "No rooms specified for helper."}))
+                sys.exit(1)
+            
+            target_rooms = [room.strip() for room in args.rooms.split(',')]
+            extractor = KakaoTalkExtractor()
+            messages = extractor.extract_via_ui_automation(
+                target_rooms=target_rooms,
+                max_messages=args.max_messages
+            )
+            output = [asdict(msg) for msg in messages]
+            print("---JSON-START---")
+            print(json.dumps(output, ensure_ascii=False))
+            print("---JSON-END---")
+            sys.exit(0)
+
+        if args.list_rooms_helper:
+            extractor = KakaoTalkExtractor()
+            rooms = extractor.get_room_list()
+            print("---JSON-START---")
+            print(json.dumps(rooms, ensure_ascii=False))
+            print("---JSON-END---")
+            sys.exit(0)
+
+    # Interactive test mode (can run on any OS for file parsing, but UI parts are Windows/WSL)
+    if args.test_list_rooms:
+        print("=== 카카오톡 추출 모듈 테스트: 채팅방 목록 ===")
+        extractor = KakaoTalkExtractor()
         print("채팅방 목록을 가져옵니다 (카카오톡 채팅 탭이 열려있어야 합니다)...")
         rooms = extractor.get_room_list()
         if not rooms:
@@ -475,6 +736,12 @@ if __name__ == "__main__":
                 print(f"{i}. {room}")
         sys.exit(0)
 
-    # 내보내기 파일 테스트
-    print("카카오톡 대화 내보내기 파일 파싱 테스트")
-    print("사용법: extractor.extract_from_export_file('KakaoTalk_export.txt')")
+    # Default message if no specific arguments are given
+    if len(sys.argv) == 1:
+        print("=== 카카오톡 추출 모듈 ===")
+        print("이 스크립트는 다른 모듈에서 가져와서 사용하거나, 헬퍼로 실행됩니다.")
+        print("\nCLI 테스트 옵션:")
+        print("  --test-list-rooms : (Windows/WSL) UI 자동화로 채팅방 목록 가져오기")
+        print("\nWSL 헬퍼 모드 (내부용):")
+        print("  --as-wsl-helper --rooms \"...\" : 메시지 추출")
+        print("  --list-rooms-helper : 채팅방 목록 추출")

@@ -67,7 +67,8 @@ class EmailItem:
 
 class EmailExtractor:
     """
-    IMAP 프로토콜을 사용하여 이메일 데이터를 추출하는 클래스.
+    IMAP 프로토콜을 사용하여 온라인 이메일 데이터를 추출하는 클래스.
+    로컬 Outlook PST 파일로부터의 추출은 직접 지원하지 않습니다.
     네이버 메일, Gmail 등 IMAP을 지원하는 모든 이메일 서비스에 사용 가능합니다.
     """
 
