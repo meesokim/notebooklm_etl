@@ -327,13 +327,17 @@ class KakaoTalkExtractor:
             return []
 
         if self._is_wsl:
-            target_rooms = target_rooms or ["나에게 쓰기"]
-            rooms_str = ",".join(target_rooms)
             args = [
                 "--as-wsl-helper",
-                "--rooms", rooms_str,
                 "--max-messages", str(max_messages)
             ]
+            # target_rooms가 명시적으로 제공된 경우에만 --rooms 인자를 추가합니다.
+            if target_rooms:
+                rooms_str = ",".join(target_rooms)
+                args.extend(["--rooms", rooms_str])
+            # target_rooms가 없으면 --rooms 인자를 생략하고,
+            # Windows 헬퍼 스크립트가 설정 파일(user_config.json)을 참조하도록 합니다.
+
             data = self._run_wsl_helper(args)
             
             if isinstance(data, list):
@@ -474,6 +478,22 @@ class KakaoTalkExtractor:
             # Ctrl+2 로 채팅 탭으로 이동
             _send_hotkey(hwndkakao, win32con.VK_CONTROL, ord('2'))
             time.sleep(0.5)
+
+            # 검색창을 찾아 내용을 비웁니다.
+            try:
+                hwnd_child = win32gui.FindWindowEx(hwndkakao, None, "EVA_ChildWindow", None)
+                if hwnd_child:
+                    # 검색창이 포함된 EVA_Window 핸들 탐색
+                    hwnd_eva_window_1 = win32gui.FindWindowEx(hwnd_child, None, "EVA_Window", None)
+                    hwnd_eva_window_2 = win32gui.FindWindowEx(hwnd_child, hwnd_eva_window_1, "EVA_Window", None)
+                    if hwnd_eva_window_2:
+                        hwnd_search_edit = win32gui.FindWindowEx(hwnd_eva_window_2, None, "Edit", None)
+                        if hwnd_search_edit:
+                            win32api.SendMessage(hwnd_search_edit, win32con.WM_SETTEXT, 0, "")
+                            logger.info("카카오톡 검색창을 비웠습니다.")
+                            time.sleep(0.5) # UI 갱신 대기
+            except Exception as e:
+                logger.warning(f"카카오톡 검색창을 비우는 데 실패했습니다: {e}")
 
             # 채팅 목록 부분을 클릭해서 포커스
             rect = win32gui.GetWindowRect(hwndkakao)
@@ -690,21 +710,64 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="KakaoTalk Extractor Module & Helper")
     parser.add_argument("--as-wsl-helper", action="store_true", help="Run as a message extraction helper for WSL.")
     parser.add_argument("--list-rooms-helper", action="store_true", help="Run as a room list helper for WSL.")
-    parser.add_argument("--rooms", type=str, help="Comma-separated list of target room names for helper.")
+    parser.add_argument("--rooms", nargs='?', const=True, default=None, help="Comma-separated list of target room names. If omitted, uses config.")
     parser.add_argument("--max-messages", type=int, default=100, help="Max messages to extract for helper.")
     parser.add_argument("--test-list-rooms", action="store_true", help="Interactively test listing chat rooms.")
+    parser.add_argument("--test-extract", action="store_true", help="Interactively test message extraction using UI automation.")
+    parser.add_argument("--convert-txt", type=str, help="Convert a KakaoTalk export .txt file to a .md file.")
 
     args = parser.parse_args()
+
+    # New feature: Convert a .txt file to .md
+    if args.convert_txt:
+        input_path = Path(args.convert_txt)
+        if not input_path.exists() or not input_path.is_file():
+            print(f"오류: 파일을 찾을 수 없습니다: {input_path}")
+            sys.exit(1)
+
+        print(f"=== 카카오톡 TXT 변환기 ===")
+        print(f"입력 파일: {input_path}")
+
+        extractor = KakaoTalkExtractor()
+        # Set a high limit for max_messages to parse the whole file
+        messages = extractor.extract_from_export_file(str(input_path), max_messages=50000)
+
+        if not messages:
+            print("❌ 실패: 파일에서 메시지를 파싱하지 못했습니다. 올바른 카카오톡 내보내기 형식인지 확인하세요.")
+            sys.exit(1)
+        
+        print(f"✅ 성공: {len(messages)}개의 메시지를 파싱했습니다.")
+
+        md_title = f"{messages[0].room_name} 대화 기록" if messages else "카카오톡 대화 기록"
+        md_content = kakao_messages_to_markdown(messages, title=md_title)
+        output_path = input_path.with_suffix('.md')
+        
+        try:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(md_content)
+            print(f"✅ 성공: 마크다운 파일을 저장했습니다: {output_path}")
+        except Exception as e:
+            print(f"❌ 실패: 마크다운 파일 저장 중 오류 발생: {e}")
+        sys.exit(0)
 
     # This part only runs on Windows when called as a helper
     if sys.platform == "win32":
         if args.as_wsl_helper:
-            if not args.rooms:
-                print(json.dumps({"error": "No rooms specified for helper."}))
-                sys.exit(1)
-            
-            target_rooms = [room.strip() for room in args.rooms.split(',')]
             extractor = KakaoTalkExtractor()
+            target_rooms = None
+
+            if isinstance(args.rooms, str):
+                target_rooms = [room.strip() for room in args.rooms.split(',')]
+            else:
+                # --rooms 인자가 제공되지 않은 경우, 설정 파일에서 로드
+                logger.info("--rooms 인자가 없거나 값 없이 사용되어 설정 파일(user_config.json)의 target_rooms를 사용합니다.")
+                target_rooms = extractor._config.get('target_rooms')
+
+            if not target_rooms:
+                # 설정 파일에도 없거나 비어있으면 기본값 사용
+                target_rooms = ["나에게 쓰기"]
+                logger.info("설정 파일에 target_rooms가 없어 기본값 '나에게 쓰기'를 사용합니다.")
+
             messages = extractor.extract_via_ui_automation(
                 target_rooms=target_rooms,
                 max_messages=args.max_messages
@@ -723,6 +786,43 @@ if __name__ == "__main__":
             print("---JSON-END---")
             sys.exit(0)
 
+    # Interactive test for message extraction
+    if args.test_extract:
+        if sys.platform != "win32" and not KakaoTalkExtractor()._is_wsl:
+            print("오류: 메시지 추출 테스트는 Windows 또는 WSL 환경에서만 실행할 수 있습니다.")
+            sys.exit(1)
+
+        print("=== 카카오톡 추출 모듈 테스트: 메시지 추출 ===")
+        extractor = KakaoTalkExtractor()
+        target_rooms = None
+
+        if isinstance(args.rooms, str):
+            target_rooms = [room.strip() for room in args.rooms.split(',')]
+            print(f"--rooms 인자로 채팅방을 지정했습니다: {target_rooms}")
+        else:  # This covers args.rooms being None or True
+            print("--rooms 인자가 없거나 값 없이 사용되어 설정 파일(user_config.json)을 사용합니다.")
+            target_rooms = extractor._config.get('target_rooms')
+
+        if not target_rooms:
+            target_rooms = ["나에게 쓰기"]
+            print("설정 파일에 대상 채팅방이 없어 기본값 '나에게 쓰기'를 사용합니다.")
+
+        print(f"\n추출 대상 채팅방: {target_rooms}")
+        print(f"최대 메시지 수: {args.max_messages}\n")
+
+        messages = extractor.extract_via_ui_automation(
+            target_rooms=target_rooms,
+            max_messages=args.max_messages
+        )
+
+        if messages:
+            print(f"✅ 성공: {len(messages)}개의 메시지를 추출했습니다.")
+            md = kakao_messages_to_markdown(messages)
+            print("\n--- 마크다운 변환 미리보기 ---\n" + md[:800] + "...")
+        else:
+            print("❌ 실패: 메시지를 추출하지 못했습니다.")
+        sys.exit(0)
+
     # Interactive test mode (can run on any OS for file parsing, but UI parts are Windows/WSL)
     if args.test_list_rooms:
         print("=== 카카오톡 추출 모듈 테스트: 채팅방 목록 ===")
@@ -737,11 +837,13 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # Default message if no specific arguments are given
-    if len(sys.argv) == 1:
+    if not any(vars(args).values()):
         print("=== 카카오톡 추출 모듈 ===")
         print("이 스크립트는 다른 모듈에서 가져와서 사용하거나, 헬퍼로 실행됩니다.")
         print("\nCLI 테스트 옵션:")
         print("  --test-list-rooms : (Windows/WSL) UI 자동화로 채팅방 목록 가져오기")
+        print("  --test-extract [--rooms \"...\"] : (Windows/WSL) UI 자동화로 메시지 추출하기")
+        print("  --convert-txt <file.txt> : 카카오톡 대화(.txt)를 마크다운(.md)으로 변환")
         print("\nWSL 헬퍼 모드 (내부용):")
         print("  --as-wsl-helper --rooms \"...\" : 메시지 추출")
         print("  --list-rooms-helper : 채팅방 목록 추출")

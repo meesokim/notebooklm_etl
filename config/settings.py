@@ -59,6 +59,7 @@ class KakaoTalkConfig:
     enabled: bool = False
     target_rooms: List[str] = field(default_factory=lambda: ["나에게 쓰기"])
     max_messages: int = 100
+    windows_python_path: Optional[str] = None  # WSL 환경에서 사용할 Windows Python 경로
 
 
 @dataclass
@@ -68,6 +69,8 @@ class NaverCafeConfig:
     cafe_urls: List[str] = field(default_factory=list)
     keywords: List[str] = field(default_factory=list)
     max_posts: int = 20
+    scrape_my_activity: bool = True  # 내 활동(내가 쓴 글) 수집 여부
+    max_my_activity_posts: int = 50  # 내 활동 수집 시 최대 게시물 수
 
 
 @dataclass

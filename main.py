@@ -130,6 +130,8 @@ async def run_sync(settings_manager: SettingsManager):
         try:
             from extractors.web_scraper import NaverCafeScraper
             scraper = NaverCafeScraper()
+            
+            # 특정 카페 게시물 수집
             for url in settings.naver_cafe.cafe_urls:
                 posts = scraper.scrape_cafe_posts(
                     url, 
@@ -137,6 +139,13 @@ async def run_sync(settings_manager: SettingsManager):
                     max_posts=settings.naver_cafe.max_posts
                 )
                 web_contents.extend(posts)
+
+            # 내 활동 로그 수집
+            if settings.naver_cafe.scrape_my_activity:
+                print("   - 내 활동 로그 수집 중...")
+                my_posts = scraper.scrape_my_articles(max_posts=settings.naver_cafe.max_my_activity_posts)
+                web_contents.extend(my_posts)
+
             scraper.close()
             print(f"   ✓ {len(web_contents)}개 네이버 카페 게시물 수집 완료")
         except Exception as e:

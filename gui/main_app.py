@@ -194,16 +194,21 @@ class DashboardTab(tk.Frame):
 
         btn_configs = [
             ("▶ 지금 동기화 실행", COLORS["primary"], self.app.run_sync_now),
-            ("📧 이메일만 수집", COLORS["secondary"], lambda: self.app.run_partial_sync("email")),
-            ("🌐 브라우저 히스토리", COLORS["warning"], lambda: self.app.run_partial_sync("browser")),
-            ("🗑 오래된 소스 정리", COLORS["danger"], self.app.cleanup_old_sources),
+            ("📧 이메일", COLORS["secondary"], lambda: self.app.run_partial_sync("email")),
+            ("💬 카카오톡", "#FEE500", lambda: self.app.run_partial_sync("kakao")),
+            ("🌐 브라우저", COLORS["warning"], lambda: self.app.run_partial_sync("browser")),
+            ("☕ 카페", "#d2691e", lambda: self.app.run_partial_sync("naver_cafe")),
+            ("🗑 소스 정리", COLORS["danger"], self.app.cleanup_old_sources),
         ]
 
         for i, (text, color, cmd) in enumerate(btn_configs):
+            fg_color = "white"
+            if color == "#FEE500":
+                fg_color = COLORS["text_primary"]            
             btn = tk.Button(
                 action_frame, text=text,
                 font=get_best_font(10),
-                bg=color, fg="white",
+                bg=color, fg=fg_color,
                 relief=tk.FLAT, padx=15, pady=8,
                 cursor="hand2", command=cmd,
                 activebackground=COLORS["primary_dark"],
@@ -339,6 +344,8 @@ class SettingsTab(tk.Frame):
         # 설정 섹션 생성
         self._build_email_section()
         self._build_browser_section()
+        self._build_kakao_section()
+        self._build_naver_cafe_section()
         self._build_filter_section()
         self._build_notebooklm_section()
         self._build_schedule_section()
@@ -411,6 +418,62 @@ class SettingsTab(tk.Frame):
         self._add_text_area(frame, "browser_exclude_domains",
                             "제외 도메인 (줄바꿈으로 구분)",
                             "\n".join(s.exclude_domains), 4)
+
+    def _build_kakao_section(self):
+        """카카오톡 설정 섹션."""
+        frame = self._create_section("💬 카카오톡 설정")
+
+        s = self.settings.kakao
+
+        self._add_checkbox(frame, "kakao_enabled", "카카오톡 수집 활성화", s.enabled, 0)
+
+        self._add_text_area(frame, "kakao_target_rooms",
+                            "수집할 채팅방 이름 (줄바꿈으로 구분)",
+                            "\n".join(s.target_rooms), 1, height=4)
+
+        self._add_entry(frame, "kakao_max_messages", "채팅방별 최대 수집 메시지 수", str(s.max_messages), 2)
+
+        self._add_entry(frame, "kakao_windows_python_path", "Windows Python 경로 (WSL용)", s.windows_python_path or "", 3)
+
+        tk.Label(
+            frame,
+            text="💡 UI 자동화로 데이터를 수집하며, 카카오톡 PC버전이 실행 중이어야 합니다.\n"
+                 "    WSL 환경에서는 Windows의 Python 경로를 지정해야 할 수 있습니다.",
+            font=("Malgun Gothic", 8),
+            bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
+            justify=tk.LEFT
+        ).grid(row=4, column=0, columnspan=2, padx=10, pady=5, sticky="w")
+
+    def _build_naver_cafe_section(self):
+        """네이버 카페 설정 섹션."""
+        frame = self._create_section("☕ 네이버 카페 설정")
+
+        s = self.settings.naver_cafe
+
+        self._add_checkbox(frame, "naver_cafe_enabled", "네이버 카페 수집 활성화", s.enabled, 0)
+        
+        self._add_text_area(frame, "naver_cafe_urls",
+                            "수집할 카페 URL (줄바꿈으로 구분)",
+                            "\n".join(s.cafe_urls), 1, height=3)
+        
+        self._add_text_area(frame, "naver_cafe_keywords",
+                            "게시물 필터링 키워드 (줄바꿈으로 구분)",
+                            "\n".join(s.keywords), 2, height=3)
+        
+        self._add_entry(frame, "naver_cafe_max_posts", "카페별 최대 수집 게시물 수", str(s.max_posts), 3)
+
+        # New feature
+        self._add_checkbox(frame, "naver_cafe_scrape_my_activity", "내 활동(내가 쓴 글) 수집 활성화", s.scrape_my_activity, 4)
+        self._add_entry(frame, "naver_cafe_max_my_activity_posts", "내 활동 최대 수집 게시물 수", str(s.max_my_activity_posts), 5)
+
+        tk.Label(
+            frame,
+            text="💡 웹 수집 기능은 Playwright 라이브러리가 필요하며, 로그인 세션을 위해\n"
+                 "    처음 실행 시 브라우저 창이 나타날 수 있습니다.",
+            font=("Malgun Gothic", 8),
+            bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
+            justify=tk.LEFT
+        ).grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky="w")
 
     def _build_filter_section(self):
         """필터링 설정 섹션."""
@@ -637,7 +700,35 @@ class SettingsTab(tk.Frame):
             ]
             s.browser.days_back = int(self._vars.get("browser_days_back", tk.StringVar(value="3")).get() or 3)
             s.browser.min_visit_count = int(self._vars.get("browser_min_visits", tk.StringVar(value="1")).get() or 1)
+            
+            # 카카오톡 설정
+            s.kakao.enabled = self._vars.get("kakao_enabled", tk.BooleanVar()).get()
+            rooms_text = self._vars.get("kakao_target_rooms")
+            if hasattr(rooms_text, 'get'):
+                rooms = rooms_text.get("1.0", tk.END).strip()
+                s.kakao.target_rooms = [r.strip() for r in rooms.split('\n') if r.strip()]
+            s.kakao.max_messages = int(self._vars.get("kakao_max_messages", tk.StringVar(value="100")).get() or 100)
+            path_var = self._vars.get("kakao_windows_python_path", tk.StringVar())
+            s.kakao.windows_python_path = path_var.get().strip() or None
+            
+            
+            # 네이버 카페 설정
+            s.naver_cafe.enabled = self._vars.get("naver_cafe_enabled", tk.BooleanVar()).get()
+            
+            urls_text = self._vars.get("naver_cafe_urls")
+            if hasattr(urls_text, 'get'):
+                urls = urls_text.get("1.0", tk.END).strip()
+                s.naver_cafe.cafe_urls = [u.strip() for u in urls.split('\n') if u.strip()]
 
+            kw_text = self._vars.get("naver_cafe_keywords")
+            if hasattr(kw_text, 'get'):
+                keywords = kw_text.get("1.0", tk.END).strip()
+                s.naver_cafe.keywords = [k.strip() for k in keywords.split('\n') if k.strip()]
+                
+            s.naver_cafe.max_posts = int(self._vars.get("naver_cafe_max_posts", tk.StringVar(value="20")).get() or 20)
+            s.naver_cafe.scrape_my_activity = self._vars.get("naver_cafe_scrape_my_activity", tk.BooleanVar()).get()
+            s.naver_cafe.max_my_activity_posts = int(self._vars.get("naver_cafe_max_my_activity_posts", tk.StringVar(value="50")).get() or 50)
+            
             # 필터 설정
             inc_kw = self._vars.get("filter_include_keywords")
             if hasattr(inc_kw, 'get'):
@@ -882,50 +973,60 @@ class NotebookLMETLApp:
     def check_environment(self):
         """실행 환경 및 필수 라이브러리 체크."""
         warnings = []
+        missing_notebooklm = False
         missing_playwright = False
         
         # 1. notebooklm-py 체크
         try:
             import notebooklm
         except ImportError:
-            warnings.append("- notebooklm-py 라이브러리가 설치되지 않았습니다.")
+            missing_notebooklm = True
+            warnings.append("- notebooklm-py 라이브러리가 설치되지 않았습니다. (핵심 기능 사용 불가)")
             
         # 2. Playwright 체크
         try:
             import playwright
-            # 라이브러리는 있지만 브라우저가 없는 경우도 체크 (추후 구현 가능)
         except ImportError:
             missing_playwright = True
             warnings.append("- playwright 라이브러리가 설치되지 않았습니다. (네이버 카페 수집 불가)")
             
         # 3. NotebookLM 인증 체크
-        auth_verified = False
-        try:
-            import notebooklm
-            # 두 가지 가능한 인증 파일명 모두 체크
-            auth_dir = Path.home() / ".notebooklm"
-            possible_files = ["storage.json", "storage_state.json"]
-            
-            if any((auth_dir / f).exists() for f in possible_files):
-                auth_verified = True
-        except ImportError:
-            pass
-            
-        if not auth_verified:
-            warnings.append("- NotebookLM 인증 정보 파일을 찾을 수 없습니다. (동기화 실패 시 'notebooklm auth' 재실행 권장)")
-            
-        if warnings:
-            warn_msg = "일부 기능이 정상적으로 작동하지 않을 수 있습니다:\n\n" + "\n".join(warnings)
-            self.dashboard_tab.append_log(warn_msg, "WARNING")
-            
-            if missing_playwright:
-                if messagebox.askyesno("Playwright 설치", 
-                    "웹 수집(네이버 카페 등)에 필요한 Playwright가 설치되어 있지 않습니다.\n지금 자동으로 설치하시겠습니까?\n(수 분이 소요될 수 있습니다)"):
-                    self._setup_playwright_auto()
-            else:
-                messagebox.showwarning("환경 체크 알림", warn_msg)
-        else:
+        if not missing_notebooklm:
+            auth_verified = False
+            try:
+                auth_dir = Path.home() / ".notebooklm"
+                possible_files = ["storage.json", "storage_state.json"]
+                if any((auth_dir / f).exists() for f in possible_files):
+                    auth_verified = True
+            except Exception:
+                pass
+            if not auth_verified:
+                warnings.append("- NotebookLM 인증 정보 파일을 찾을 수 없습니다. (동기화 실패 시 'notebooklm auth' 재실행 권장)")
+
+        if not warnings:
             self.dashboard_tab.append_log("✅ 모든 필수 라이브러리 및 인증이 확인되었습니다.", "SUCCESS")
+            return
+
+        warn_msg = "일부 기능이 정상적으로 작동하지 않을 수 있습니다:\n\n" + "\n".join(warnings)
+        self.dashboard_tab.append_log(warn_msg, "WARNING")
+
+        if missing_notebooklm:
+            if messagebox.askyesno("NotebookLM 라이브러리 설치",
+                                   "핵심 기능에 필요한 'notebooklm-py' 라이브러리가 설치되어 있지 않습니다.\n지금 자동으로 설치하시겠습니까?"):
+                self._setup_notebooklm_auto()
+            return
+
+        if missing_playwright:
+            if messagebox.askyesno("Playwright 설치",
+                    "웹 수집(네이버 카페 등)에 필요한 Playwright가 설치되어 있지 않습니다.\n지금 자동으로 설치하시겠습니까?\n(수 분이 소요될 수 있습니다)"):
+                self._setup_playwright_auto()
+            else: # 사용자가 playwright 설치를 거부한 경우, 다른 경고 표시
+                other_warnings = [w for w in warnings if "playwright" not in w]
+                if other_warnings:
+                    messagebox.showwarning("환경 체크 알림", "다음 문제가 발견되었습니다:\n\n" + "\n".join(other_warnings))
+        else:
+            # 라이브러리 문제는 없지만 다른 경고(예: 인증)가 있는 경우
+            messagebox.showwarning("환경 체크 알림", warn_msg)
 
     def _setup_playwright_auto(self):
         """Playwright 및 브라우저 자동 설치 수행."""
@@ -944,12 +1045,41 @@ class NotebookLMETLApp:
                 self.dashboard_tab.append_log("  - 브라우저(Chromium) 설치 중...", "INFO")
                 subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
                 
-                self.dashboard_tab.append_log("✅ Playwright 설치가 완료되었습니다. 프로그램을 재시작해 주세요.", "SUCCESS")
-                messagebox.showinfo("설치 완료", "Playwright 설치가 완료되었습니다.\n정상적인 동작을 위해 프로그램을 재시작해 주세요.")
+                self.dashboard_tab.append_log("✅ Playwright 설치가 완료되었습니다.", "SUCCESS")
+                def ask_and_restart():
+                    if messagebox.askyesno("설치 완료", "Playwright 설치가 완료되었습니다.\n프로그램 재시작이 필요합니다. 지금 재시작하시겠습니까?"):
+                        self._restart_app()
+                self.root.after(100, ask_and_restart)
             except Exception as e:
                 err_msg = f"❌ Playwright 설치 중 오류 발생: {e}"
                 self.dashboard_tab.append_log(err_msg, "ERROR")
                 messagebox.showerror("설치 오류", f"자동 설치에 실패했습니다.\n터미널에서 직접 'playwright install chromium'을 실행해 보세요.\n\n오류: {e}")
+            finally:
+                self.root.after(0, lambda: self.status_bar.set_status("준비"))
+
+        threading.Thread(target=run_install, daemon=True).start()
+
+    def _setup_notebooklm_auto(self):
+        """notebooklm-py 자동 설치 수행."""
+        import subprocess
+
+        self.dashboard_tab.append_log("⏳ notebooklm-py 자동 설치 시작...", "INFO")
+        self.status_bar.set_status("notebooklm-py 설치 중...")
+
+        def run_install():
+            try:
+                self.dashboard_tab.append_log("  - 라이브러리(pip) 설치 중...", "INFO")
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "notebooklm-py"])
+
+                self.dashboard_tab.append_log("✅ notebooklm-py 설치가 완료되었습니다.", "SUCCESS")
+                def ask_and_restart():
+                    if messagebox.askyesno("설치 완료", "notebooklm-py 설치가 완료되었습니다.\n프로그램 재시작이 필요합니다. 지금 재시작하시겠습니까?"):
+                        self._restart_app()
+                self.root.after(100, ask_and_restart)
+            except Exception as e:
+                err_msg = f"❌ notebooklm-py 설치 중 오류 발생: {e}"
+                self.dashboard_tab.append_log(err_msg, "ERROR")
+                messagebox.showerror("설치 오류", f"자동 설치에 실패했습니다.\n터미널에서 직접 'pip install notebooklm-py'를 실행해 보세요.\n\n오류: {e}")
             finally:
                 self.root.after(0, lambda: self.status_bar.set_status("준비"))
 
@@ -1062,6 +1192,8 @@ class NotebookLMETLApp:
                 from extractors.web_scraper import NaverCafeScraper
                 scraper = NaverCafeScraper()
                 cafe_contents = []
+                
+                # 특정 카페 게시물 수집
                 for url in settings.naver_cafe.cafe_urls:
                     posts = scraper.scrape_cafe_posts(
                         url,
@@ -1069,6 +1201,13 @@ class NotebookLMETLApp:
                         max_posts=settings.naver_cafe.max_posts
                     )
                     cafe_contents.extend(posts)
+
+                # 내 활동 로그 수집
+                if settings.naver_cafe.scrape_my_activity:
+                    logger.info("   - 내 활동 로그 수집 중...")
+                    my_posts = scraper.scrape_my_articles(max_posts=settings.naver_cafe.max_my_activity_posts)
+                    cafe_contents.extend(my_posts)
+
                 scraper.close()
                 logger.info(f"   ✓ 네이버 카페 {len(cafe_contents)}개 게시물 수집 완료")
                 all_contents.extend(cafe_contents)
@@ -1182,6 +1321,8 @@ class NotebookLMETLApp:
             elif source_type == "naver_cafe":
                 from extractors.web_scraper import NaverCafeScraper
                 scraper = NaverCafeScraper()
+                
+                # 특정 카페 게시물 수집
                 for url in settings.naver_cafe.cafe_urls:
                     posts = scraper.scrape_cafe_posts(
                         url,
@@ -1189,6 +1330,12 @@ class NotebookLMETLApp:
                         max_posts=settings.naver_cafe.max_posts
                     )
                     contents.extend(posts)
+
+                # 내 활동 로그 수집
+                if settings.naver_cafe.scrape_my_activity:
+                    my_posts = scraper.scrape_my_articles(max_posts=settings.naver_cafe.max_my_activity_posts)
+                    contents.extend(my_posts)
+
                 scraper.close()
 
             if not contents:

@@ -272,6 +272,77 @@ class NaverCafeScraper:
             logger.error(f"Playwright 초기화 실패: {e}")
             return False
 
+    def scrape_my_articles(self, max_posts: int = 50) -> List[WebContent]:
+        """
+        네이버 카페 '내가 쓴 글' 목록에서 게시물을 스크래핑합니다.
+        로그인이 필요합니다.
+
+        Args:
+            max_posts: 최대 수집 게시물 수
+
+        Returns:
+            추출된 WebContent 목록
+        """
+        if not self._page:
+            if not self.setup_playwright():
+                return []
+
+        results = []
+        my_articles_url = "https://cafe.naver.com/MyCafeMyArticle.nhn"
+        
+        try:
+            logger.info(f"네이버 카페 '내가 쓴 글' 스크래핑 시작: {my_articles_url}")
+            self._page.goto(my_articles_url, wait_until='networkidle', timeout=60000)
+            
+            # 로그인 페이지로 리디렉션되었는지 확인
+            if "nid.naver.com/nidlogin.login" in self._page.url:
+                logger.warning("네이버 로그인이 필요합니다. 브라우저에서 로그인해주세요. 5분 동안 대기합니다...")
+                try:
+                    # 사용자가 로그인할 때까지 대기
+                    self._page.wait_for_url(lambda url: "nid.naver.com" not in url, timeout=300000) # 5분
+                    logger.info("로그인 감지됨. '내가 쓴 글' 페이지로 다시 이동합니다.")
+                    self._page.goto(my_articles_url, wait_until='networkidle', timeout=60000)
+                except Exception:
+                    logger.error("로그인 시간 초과. '내가 쓴 글' 수집을 중단합니다.")
+                    return []
+
+            time.sleep(3)
+
+            # 'mycafe-home' iframe으로 전환
+            iframe = self._page.query_selector('iframe#mycafe-home')
+            if not iframe:
+                logger.error("'내가 쓴 글' 페이지의 iframe(mycafe-home)을 찾을 수 없습니다.")
+                return []
+            
+            frame = iframe.content_frame()
+            if not frame:
+                logger.error("iframe의 content_frame을 가져올 수 없습니다.")
+                return []
+
+            frame.wait_for_selector('.article_list', timeout=30000)
+            link_elements = frame.query_selector_all('.article_list td.board_box a.m-tcol-c')
+            
+            post_links = []
+            for link_element in link_elements[:max_posts]:
+                href = link_element.get_attribute('href')
+                if href:
+                    full_url = urljoin("https://cafe.naver.com", href)
+                    post_links.append(full_url)
+            
+            logger.info(f"추출할 '내가 쓴 글' 링크 {len(post_links)}개 발견.")
+
+            for link in post_links:
+                content = self._scrape_cafe_post(link)
+                if content:
+                    content.tags.append("my-activity")
+                    results.append(content)
+                    time.sleep(1)
+        except Exception as e:
+            logger.error(f"'내가 쓴 글' 스크래핑 중 오류 발생: {e}")
+
+        logger.info(f"네이버 카페 '내가 쓴 글' 스크래핑 완료: {len(results)}개 게시물")
+        return results
+
     def scrape_cafe_posts(
         self,
         cafe_url: str,

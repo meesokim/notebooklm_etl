@@ -730,10 +730,29 @@ def find_kakao_search_edit():
 
 
 def open_chatroom(chatroom_name):
+    hwndkakao = FindWindow(None, "카카오톡")
+    if not hwndkakao:
+        raise RuntimeError("카카오톡 창을 찾을 수 없습니다.")
+
+    # 카카오톡 창을 활성화하고 채팅 탭으로 이동 (Ctrl+2)
+    try:
+        win32gui.SetForegroundWindow(hwndkakao)
+        win32gui.BringWindowToTop(hwndkakao)
+        time.sleep(0.2)
+        _send_hotkey(hwndkakao, win32con.VK_CONTROL, ord('2'))
+        time.sleep(0.5)
+    except Exception:
+        # 로깅이 없으므로 일단 진행
+        pass
+
     hwnd_search = find_kakao_search_edit()
     if not hwnd_search:
         raise RuntimeError("카카오톡 창 또는 검색 입력창을 찾을 수 없습니다.")
 
+    # 검색창을 비우고, 검색어를 입력합니다.
+    # WM_SETTEXT는 덮어쓰기지만, UI 상태를 확실히 초기화하기 위해 빈 문자열을 먼저 보냅니다.
+    win32api.SendMessage(hwnd_search, win32con.WM_SETTEXT, 0, "")
+    time.sleep(0.1)
     win32api.SendMessage(hwnd_search, win32con.WM_SETTEXT, 0, chatroom_name)
     time.sleep(0.5)
     SendReturn(hwnd_search)
@@ -773,56 +792,59 @@ def send_message(chatroom, message):
         send_text_message(hwnd_chatroom, message)
 
 def extract_messages_from_chatroom(chatroom):
-    hwnd_chatroom = open_chatroom(chatroom)
-    hwnd_list = win32gui.FindWindowEx(hwnd_chatroom, None, "EVA_VH_ListControl_Dblclk", None)
-    if not hwnd_list:
-        raise RuntimeError("카카오톡 메시지 리스트 컨트롤을 찾을 수 없습니다.")
+    hwnd_chatroom = None
+    hwnd_dialog = None
+    try:
+        hwnd_chatroom = open_chatroom(chatroom)
+        hwnd_list = win32gui.FindWindowEx(hwnd_chatroom, None, "EVA_VH_ListControl_Dblclk", None)
+        if not hwnd_list:
+            raise RuntimeError("카카오톡 메시지 리스트 컨트롤을 찾을 수 없습니다.")
 
-    PostKeyEx(hwnd_list, ord('S'), [w.VK_CONTROL], False)
-    time.sleep(2)
-    hwnd_dialog = find_save_dialog(timeout=10)
-    print(f"저장 대화 상자 HWND: {hwnd_dialog}")
-    if not hwnd_dialog:
-        raise RuntimeError("저장 대화 상자의 HWND를 찾을 수 없습니다.")
-    filename = get_save_dialog_filename(hwnd_dialog)
-    fullpath_by_cdm = get_save_dialog_filepath(hwnd_dialog)
-    directory = get_save_dialog_directory(hwnd_dialog, filename=filename)
-    if fullpath_by_cdm:
-        filepath = str(pathlib.PureWindowsPath(fullpath_by_cdm))
-    elif directory and filename:
-        filepath = str(pathlib.PureWindowsPath(directory) / filename)
-    else:
-        filepath = filename
-    filepath = ensure_txt_filepath(filepath)
-    print(f"저장 파일명: {filename}")
-    print(f"저장 디렉토리: {directory}")
-    print(f"저장 전체경로: {filepath}")
-    time.sleep(0.3)
-    send_alt_s(hwnd_dialog)
-    confirm_after_save(hwnd_dialog, timeout=3.0)
-    time.sleep(1.0)  # 파일 생성 대기
-    if pathlib.PureWindowsPath(filepath).stem == pathlib.PureWindowsPath(filename).stem:
+        PostKeyEx(hwnd_list, ord('S'), [w.VK_CONTROL], False)
+        time.sleep(2)
+        
+        hwnd_dialog = find_save_dialog(timeout=10)
+        if not hwnd_dialog:
+            raise RuntimeError("저장 대화 상자를 찾을 수 없습니다.")
+
+        filename = get_save_dialog_filename(hwnd_dialog)
+        if not filename:
+            raise RuntimeError("저장 대화 상자에서 파일명을 얻을 수 없습니다.")
+            
+        directory = get_save_dialog_directory(hwnd_dialog, filename=filename)
+        filepath = str(pathlib.PureWindowsPath(directory) / filename) if directory and filename else filename
+        filepath = ensure_txt_filepath(filepath)
+
+        print(f"저장 파일명: {filename}, 디렉토리: {directory}")
+
+        send_alt_s(hwnd_dialog)
+        time.sleep(0.5)
+
+        hwnd_confirm = find_foreground_dialog(timeout=2)
+        if hwnd_confirm and hwnd_confirm != hwnd_dialog:
+            press_return(hwnd_confirm)
+            wait_until_window_closed(hwnd_confirm, timeout=2)
+
+        wait_until_window_closed(hwnd_dialog, timeout=3)
+        time.sleep(1.0)
+
         resolved = resolve_saved_filepath(filename, directory=directory)
         if resolved:
             filepath = ensure_txt_filepath(resolved)
-            directory = str(pathlib.Path(resolved).parent)
-    filepath = rename_saved_file_with_chatroom(filepath, chatroom)
-    time.sleep(0.5)
-    close_chatroom_window(hwnd_chatroom, chatroom_name=chatroom)
-    content = read_saved_text_file(filepath)
-    print(f"최종 저장 경로: {filepath}")
-    if content:
-        print("저장 파일 내용:")
-        print(content)
-    else:
-        print("저장 파일 내용을 읽지 못했습니다.")
-    return filepath
-    # win32clipboard.OpenClipboard()
-    # try:
-    #     data = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
-    # finally:
-    #     win32clipboard.CloseClipboard()
-    # return data.split('\n')
+        
+        filepath = rename_saved_file_with_chatroom(filepath, chatroom)
+        
+        content = read_saved_text_file(filepath)
+        print(f"최종 저장 경로: {filepath}")
+        if not content:
+            print("경고: 저장된 파일의 내용을 읽지 못했습니다.")
+        
+        return filepath
+    finally:
+        if hwnd_dialog and win32gui.IsWindow(hwnd_dialog):
+            win32gui.PostMessage(hwnd_dialog, win32con.WM_CLOSE, 0, 0)
+        if hwnd_chatroom and win32gui.IsWindow(hwnd_chatroom):
+            close_chatroom_window(hwnd_chatroom, chatroom_name=chatroom)
 
 if __name__ == '__main__':
     if (len(sys.argv) > 1):
