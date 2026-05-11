@@ -128,26 +128,30 @@ async def run_sync(settings_manager: SettingsManager):
     if settings.naver_cafe.enabled:
         print("☕ 네이버 카페 수집 중...")
         try:
-            from extractors.web_scraper import NaverCafeScraper
-            scraper = NaverCafeScraper()
-            
-            # 특정 카페 게시물 수집
-            for url in settings.naver_cafe.cafe_urls:
-                posts = scraper.scrape_cafe_posts(
-                    url, 
-                    keywords=settings.naver_cafe.keywords,
-                    max_posts=settings.naver_cafe.max_posts
-                )
-                web_contents.extend(posts)
+            def _scrape_cafe_sync():
+                from extractors.naver_cafe import NaverCafeScraper
+                scraper = NaverCafeScraper()
+                contents = []
+                # 특정 카페 게시물 수집
+                for url in settings.naver_cafe.cafe_urls:
+                    posts = scraper.scrape_cafe_posts(
+                        url, 
+                        keywords=settings.naver_cafe.keywords,
+                        max_posts=settings.naver_cafe.max_posts
+                    )
+                    contents.extend(posts)
 
-            # 내 활동 로그 수집
-            if settings.naver_cafe.scrape_my_activity:
-                print("   - 내 활동 로그 수집 중...")
-                my_posts = scraper.scrape_my_articles(max_posts=settings.naver_cafe.max_my_activity_posts)
-                web_contents.extend(my_posts)
+                # 내 활동 로그 수집
+                if settings.naver_cafe.scrape_my_activity:
+                    print("   - 내 활동 로그 수집 중...")
+                    my_posts = scraper.scrape_my_activity(max_posts=settings.naver_cafe.max_my_activity_posts)
+                    print(f"     ✓ {len(my_posts)}개 활동 내역 수집 완료")
+                    contents.extend(my_posts)
 
-            scraper.close()
-            print(f"   ✓ {len(web_contents)}개 네이버 카페 게시물 수집 완료")
+                scraper.close()
+                print(f"   ✓ 총 {len(contents)}개 네이버 카페 콘텐츠 수집 완료")
+                return contents
+            web_contents = await asyncio.to_thread(_scrape_cafe_sync)
         except Exception as e:
             print(f"   ✗ 네이버 카페 수집 실패: {e}")
     else:

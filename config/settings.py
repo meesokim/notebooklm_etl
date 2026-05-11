@@ -66,6 +66,9 @@ class KakaoTalkConfig:
 class NaverCafeConfig:
     """네이버 카페 수집 설정"""
     enabled: bool = False
+    username: str = ""
+    password: str = ""
+    use_programmatic_login: bool = False
     cafe_urls: List[str] = field(default_factory=list)
     keywords: List[str] = field(default_factory=list)
     max_posts: int = 20
@@ -147,7 +150,15 @@ class SettingsManager:
                         if stored_pwd:
                             self._settings.email.password = stored_pwd
                     except Exception as e:
-                        print(f"[INFO] Keyring 백엔드를 사용할 수 없습니다. (비밀번호 자동 로드 건너뜀)")
+                        print(f"[INFO] Keyring: 이메일 비밀번호를 위한 보안 백엔드를 찾을 수 없습니다. (WSL/서버 환경에서는 일반적입니다)")
+                # Keyring에서 네이버 비밀번호 로드
+                if self._settings.naver_cafe.username:
+                    try:
+                        stored_pwd = keyring.get_password("notebooklm_etl_naver", self._settings.naver_cafe.username)
+                        if stored_pwd:
+                            self._settings.naver_cafe.password = stored_pwd
+                    except Exception as e:
+                        print(f"[INFO] Keyring: 네이버 비밀번호를 위한 보안 백엔드를 찾을 수 없습니다.")
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"[WARNING] 설정 파일 로드 실패: {e}. 기본값을 사용합니다.")
                 self._settings = AppSettings()
@@ -158,19 +169,30 @@ class SettingsManager:
 
     def save(self, settings: AppSettings) -> None:
         """설정을 JSON 파일로 저장."""
-        password_saved_in_keyring = False
+        email_pwd_saved = False
+        naver_pwd_saved = False
+
         # 비밀번호는 Keyring에 따로 저장하고 JSON에는 빈 값으로 저장 시도
         if settings.email.username and settings.email.password:
             try:
                 keyring.set_password("notebooklm_etl", settings.email.username, settings.email.password)
-                password_saved_in_keyring = True
-            except Exception:
-                print(f"[WARNING] Keyring 백엔드 오류로 비밀번호를 안전하게 저장하지 못했습니다.")
+                email_pwd_saved = True
+            except Exception as e:
+                print(f"[WARNING] Keyring: 이메일 비밀번호를 보안 저장소에 저장하지 못했습니다. 설정 파일에 기록될 수 있습니다.")
         
+        if settings.naver_cafe.username and settings.naver_cafe.password:
+            try:
+                keyring.set_password("notebooklm_etl_naver", settings.naver_cafe.username, settings.naver_cafe.password)
+                naver_pwd_saved = True
+            except Exception as e:
+                print(f"[WARNING] Keyring: 네이버 비밀번호를 보안 저장소에 저장하지 못했습니다. 설정 파일에 기록될 수 있습니다.")
+
         # 보안을 위해 실제 비밀번호를 제외한 복사본 저장
         temp_settings = asdict(settings)
-        if password_saved_in_keyring:
+        if email_pwd_saved:
             temp_settings['email']['password'] = ""
+        if naver_pwd_saved:
+            temp_settings['naver_cafe']['password'] = ""
         
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.config_path, 'w', encoding='utf-8') as f:

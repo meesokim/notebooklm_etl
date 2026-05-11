@@ -451,29 +451,32 @@ class SettingsTab(tk.Frame):
         s = self.settings.naver_cafe
 
         self._add_checkbox(frame, "naver_cafe_enabled", "네이버 카페 수집 활성화", s.enabled, 0)
+        self._add_entry(frame, "naver_cafe_username", "네이버 아이디", s.username, 1)
+        self._add_entry(frame, "naver_cafe_password", "네이버 비밀번호", s.password, 2, show="*")
+        self._add_checkbox(frame, "naver_cafe_use_programmatic_login", "자동 로그인 사용", s.use_programmatic_login, 3)
         
         self._add_text_area(frame, "naver_cafe_urls",
                             "수집할 카페 URL (줄바꿈으로 구분)",
-                            "\n".join(s.cafe_urls), 1, height=3)
+                            "\n".join(s.cafe_urls), 4, height=3)
         
         self._add_text_area(frame, "naver_cafe_keywords",
                             "게시물 필터링 키워드 (줄바꿈으로 구분)",
-                            "\n".join(s.keywords), 2, height=3)
+                            "\n".join(s.keywords), 5, height=3)
         
-        self._add_entry(frame, "naver_cafe_max_posts", "카페별 최대 수집 게시물 수", str(s.max_posts), 3)
+        self._add_entry(frame, "naver_cafe_max_posts", "카페별 최대 수집 게시물 수", str(s.max_posts), 6)
 
         # New feature
-        self._add_checkbox(frame, "naver_cafe_scrape_my_activity", "내 활동(내가 쓴 글) 수집 활성화", s.scrape_my_activity, 4)
-        self._add_entry(frame, "naver_cafe_max_my_activity_posts", "내 활동 최대 수집 게시물 수", str(s.max_my_activity_posts), 5)
+        self._add_checkbox(frame, "naver_cafe_scrape_my_activity", "내 활동(내가 쓴 글) 수집 활성화", s.scrape_my_activity, 7)
+        self._add_entry(frame, "naver_cafe_max_my_activity_posts", "내 활동 최대 수집 게시물 수", str(s.max_my_activity_posts), 8)
 
         tk.Label(
             frame,
-            text="💡 웹 수집 기능은 Playwright 라이브러리가 필요하며, 로그인 세션을 위해\n"
-                 "    처음 실행 시 브라우저 창이 나타날 수 있습니다.",
+            text="💡 자동 로그인은 CAPTCHA 또는 2단계 인증으로 실패할 수 있습니다.\n"
+                 "    실패 시, 자동 로그인을 끄고 나타나는 브라우저에서 직접 로그인하세요.",
             font=("Malgun Gothic", 8),
             bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
             justify=tk.LEFT
-        ).grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky="w")
+        ).grid(row=9, column=0, columnspan=2, padx=10, pady=5, sticky="w")
 
     def _build_filter_section(self):
         """필터링 설정 섹션."""
@@ -714,6 +717,10 @@ class SettingsTab(tk.Frame):
             
             # 네이버 카페 설정
             s.naver_cafe.enabled = self._vars.get("naver_cafe_enabled", tk.BooleanVar()).get()
+            s.naver_cafe.username = self._vars.get("naver_cafe_username", tk.StringVar()).get()
+            s.naver_cafe.password = self._vars.get("naver_cafe_password", tk.StringVar()).get()
+            s.naver_cafe.use_programmatic_login = self._vars.get("naver_cafe_use_programmatic_login", tk.BooleanVar()).get()
+            
             
             urls_text = self._vars.get("naver_cafe_urls")
             if hasattr(urls_text, 'get'):
@@ -1189,27 +1196,30 @@ class NotebookLMETLApp:
         if settings.naver_cafe.enabled:
             logger.info("☕ 네이버 카페 수집 시작...")
             try:
-                from extractors.web_scraper import NaverCafeScraper
-                scraper = NaverCafeScraper()
-                cafe_contents = []
-                
-                # 특정 카페 게시물 수집
-                for url in settings.naver_cafe.cafe_urls:
-                    posts = scraper.scrape_cafe_posts(
-                        url,
-                        keywords=settings.naver_cafe.keywords,
-                        max_posts=settings.naver_cafe.max_posts
-                    )
-                    cafe_contents.extend(posts)
+                def _scrape_cafe_sync():
+                    from extractors.naver_cafe import NaverCafeScraper
+                    scraper = NaverCafeScraper()
+                    contents = []
+                    # 특정 카페 게시물 수집
+                    for url in settings.naver_cafe.cafe_urls:
+                        posts = scraper.scrape_cafe_posts(
+                            url,
+                            keywords=settings.naver_cafe.keywords,
+                            max_posts=settings.naver_cafe.max_posts
+                        )
+                        contents.extend(posts)
 
-                # 내 활동 로그 수집
-                if settings.naver_cafe.scrape_my_activity:
-                    logger.info("   - 내 활동 로그 수집 중...")
-                    my_posts = scraper.scrape_my_articles(max_posts=settings.naver_cafe.max_my_activity_posts)
-                    cafe_contents.extend(my_posts)
+                    # 내 활동 로그 수집
+                    if settings.naver_cafe.scrape_my_activity:
+                        logger.info("   - 내 활동 로그 수집 중...")
+                        my_posts = scraper.scrape_my_activity(max_posts=settings.naver_cafe.max_my_activity_posts)
+                        logger.info(f"     ✓ {len(my_posts)}개 활동 내역 수집 완료")
+                        contents.extend(my_posts)
 
-                scraper.close()
-                logger.info(f"   ✓ 네이버 카페 {len(cafe_contents)}개 게시물 수집 완료")
+                    scraper.close()
+                    logger.info(f"   ✓ 총 {len(contents)}개 네이버 카페 콘텐츠 수집 완료")
+                    return contents
+                cafe_contents = await asyncio.to_thread(_scrape_cafe_sync)
                 all_contents.extend(cafe_contents)
             except Exception as e:
                 logger.error(f"   ✗ 네이버 카페 수집 실패: {e}")
@@ -1319,24 +1329,30 @@ class NotebookLMETLApp:
                     max_messages=settings.kakao.max_messages
                 )
             elif source_type == "naver_cafe":
-                from extractors.web_scraper import NaverCafeScraper
-                scraper = NaverCafeScraper()
-                
-                # 특정 카페 게시물 수집
-                for url in settings.naver_cafe.cafe_urls:
-                    posts = scraper.scrape_cafe_posts(
-                        url,
-                        keywords=settings.naver_cafe.keywords,
-                        max_posts=settings.naver_cafe.max_posts
-                    )
-                    contents.extend(posts)
+                def _scrape_cafe_sync():
+                    from extractors.naver_cafe import NaverCafeScraper
+                    scraper = NaverCafeScraper()
+                    cafe_contents = []
+                    # 특정 카페 게시물 수집
+                    for url in settings.naver_cafe.cafe_urls:
+                        posts = scraper.scrape_cafe_posts(
+                            url,
+                            keywords=settings.naver_cafe.keywords,
+                            max_posts=settings.naver_cafe.max_posts
+                        )
+                        cafe_contents.extend(posts)
 
-                # 내 활동 로그 수집
-                if settings.naver_cafe.scrape_my_activity:
-                    my_posts = scraper.scrape_my_articles(max_posts=settings.naver_cafe.max_my_activity_posts)
-                    contents.extend(my_posts)
+                    # 내 활동 로그 수집
+                    if settings.naver_cafe.scrape_my_activity:
+                        logger.info("   - 내 활동 로그 수집 중...")
+                        my_posts = scraper.scrape_my_activity(max_posts=settings.naver_cafe.max_my_activity_posts)
+                        logger.info(f"     ✓ {len(my_posts)}개 활동 내역 수집 완료")
+                        cafe_contents.extend(my_posts)
 
-                scraper.close()
+                    scraper.close()
+                    logger.info(f"   ✓ 총 {len(cafe_contents)}개 네이버 카페 콘텐츠 수집 완료")
+                    return cafe_contents
+                contents = await asyncio.to_thread(_scrape_cafe_sync)
 
             if not contents:
                 logger.info(f"ℹ️ {source_type}: 수집된 새로운 데이터가 없습니다.")
