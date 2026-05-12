@@ -270,17 +270,22 @@ def rename_saved_file_with_chatroom(filepath, chatroom):
 
 
 def find_save_dialog(timeout=10):
-    """Find a file save dialog window by class and title."""
+    """Find a file save dialog window by class and title. More robustly."""
     end_time = time.time() + timeout
+
+    def enum_windows_proc(hwnd, lParam):
+        class_name = win32gui.GetClassName(hwnd)
+        title = win32gui.GetWindowText(hwnd) or ""
+        if class_name == "#32770" and any(k in title for k in ["저장", "다른 이름으로 저장", "Save", "Save As"]):
+            if win32gui.IsWindowVisible(hwnd):
+                lParam.append(hwnd)
+        return True
+
     while time.time() < end_time:
-        hwnd = win32gui.GetForegroundWindow()
-        if hwnd and IsWindow(hwnd):
-            root = win32gui.GetAncestor(hwnd, win32con.GA_ROOT)
-            if root and IsWindow(root):
-                class_name = win32gui.GetClassName(root)
-                title = win32gui.GetWindowText(root) or ""
-                if class_name == "#32770" and any(k in title for k in ["저장", "다른 이름으로 저장", "Save", "Save As"]):
-                    return root
+        dialogs = []
+        win32gui.EnumWindows(enum_windows_proc, dialogs)
+        if dialogs:
+            return dialogs[0]
         time.sleep(0.2)
     return None
 

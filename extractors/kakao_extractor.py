@@ -202,6 +202,35 @@ class KakaoTalkExtractor:
             logger.error(f"WSL helper 실행 중 예외 발생: {e}")
             return None
             
+    def _extract_from_local_files(self, max_messages: int) -> List[KakaoMessage]:
+        """data/kakaotalk 디렉토리의 .txt 파일에서 메시지를 추출합니다."""
+        kakaotalk_data_dir = Path(__file__).parent.parent / "data" / "kakaotalk"
+        if not kakaotalk_data_dir.exists():
+            logger.debug("로컬 카카오톡 데이터 디렉토리(data/kakaotalk)가 없습니다. 파일 기반 추출을 건너뜁니다.")
+            return []
+
+        messages = []
+        txt_files = list(kakaotalk_data_dir.glob("*.txt"))
+        if not txt_files:
+            logger.debug("로컬 카카오톡 데이터 디렉토리에 .txt 파일이 없습니다.")
+            return []
+        
+        logger.info(f"{len(txt_files)}개의 로컬 카카오톡 .txt 파일을 발견했습니다. 파싱을 시작합니다.")
+        for file_path in txt_files:
+            if len(messages) >= max_messages:
+                logger.info(f"최대 메시지 수({max_messages})에 도달하여 로컬 파일 처리를 중단합니다.")
+                break
+            remaining = max_messages - len(messages)
+            logger.info(f"파일 파싱 중: {file_path.name}")
+            try:
+                file_messages = self.extract_from_export_file(str(file_path), max_messages=remaining)
+                messages.extend(file_messages)
+            except Exception as e:
+                logger.warning(f"파일 '{file_path.name}' 파싱 중 오류 발생: {e}")
+        
+        logger.info(f"로컬 파일에서 총 {len(messages)}개의 메시지를 추출했습니다.")
+        return messages
+
     def extract_from_export_file(
         self,
         file_path: str,
@@ -308,7 +337,7 @@ class KakaoTalkExtractor:
     def extract_via_ui_automation(
         self,
         target_rooms: List[str] = None,
-        max_messages: int = 100
+        max_messages: int = 10000
     ) -> List[KakaoMessage]:
         """
         Windows UI 자동화를 통해 카카오톡 PC에서 실시간으로 채팅 내용을 추출합니다.
@@ -337,14 +366,13 @@ class KakaoTalkExtractor:
                 args.extend(["--rooms", rooms_str])
             # target_rooms가 없으면 --rooms 인자를 생략하고,
             # Windows 헬퍼 스크립트가 설정 파일(user_config.json)을 참조하도록 합니다.
-
-            data = self._run_wsl_helper(args)
-            
-            if isinstance(data, list):
-                messages = [KakaoMessage(**item) for item in data]
-                logger.info(f"WSL Helper를 통해 {len(messages)}개의 메시지를 성공적으로 추출했습니다.")
-                return messages
-            return []
+            messages = self._extract_from_local_files(max_messages)
+            if not len(messages):
+                data = self._run_wsl_helper(args)
+                if isinstance(data, list):
+                    messages = [KakaoMessage(**item) for item in data]
+                    logger.info(f"WSL Helper를 통해 {len(messages)}개의 메시지를 성공적으로 추출했습니다.")
+            return messages
 
         # --- 기존 Windows 전용 로직 ---
         target_rooms = target_rooms or ["나에게 쓰기"]
@@ -355,11 +383,42 @@ class KakaoTalkExtractor:
             import kakaotalk
             logger.info("카카오톡 내보내기 자동화 경로를 사용합니다. (kakaotalk.py)")
 
+            kakaotalk_data_dir = Path(__file__).parent / "data" / "kakaotalk"
+
             for room_name in target_rooms:
                 if len(messages) >= max_messages:
+                    logger.info(f"최대 메시지 수({max_messages})에 도달하여 처리를 중단합니다.")
                     break
 
                 remaining = max_messages - len(messages)
+
+                # 먼저 로컬 파일 시스템에서 해당 대화방의 txt 파일이 있는지 확인
+                found_local_file = False
+                local_file_path = None
+                if kakaotalk_data_dir.exists():
+                    # 대화방 이름이 포함된 파일을 찾습니다.
+                    possible_files = list(kakaotalk_data_dir.glob(f"*{room_name}*.txt"))
+                    if possible_files:
+                        # 여러 파일이 발견될 경우, 여기서는 첫 번째 파일을 사용합니다.
+                        local_file_path = possible_files[0]
+                
+                if local_file_path:
+                    logger.info(f"채팅방 '{room_name}'에 해당하는 로컬 파일 '{local_file_path.name}'을 발견했습니다. 파일에서 추출합니다.")
+                    try:
+                        room_messages = self.extract_from_export_file(str(local_file_path), max_messages=remaining)
+                        if room_messages:
+                            for m in room_messages:
+                                m.room_name = room_name
+                            messages.extend(room_messages)
+                            logger.info(f"파일 '{local_file_path.name}'에서 {len(room_messages)}개 메시지 추출 완료.")
+                        found_local_file = True
+                    except Exception as e:
+                        logger.warning(f"로컬 파일 '{local_file_path.name}' 파싱 중 오류 발생: {e}. UI 자동화를 시도합니다.")
+                
+                if found_local_file:
+                    continue
+
+                # 로컬 파일이 없거나 파싱에 실패한 경우, UI 자동화 시도
                 logger.info(f"채팅방 '{room_name}' 내보내기/파싱 시작... (남은 한도: {remaining})")
 
                 try:
@@ -388,6 +447,7 @@ class KakaoTalkExtractor:
 
         except ImportError:
             logger.warning("kakaotalk.py 모듈을 찾을 수 없습니다. pywinauto 폴백을 시도합니다.")
+            # The fallback logic below will be executed
         except Exception as e:
             logger.warning(f"kakaotalk.py 경로 사용 중 오류: {e}")
 
@@ -706,17 +766,22 @@ if __name__ == "__main__":
     import argparse
     import json
     from dataclasses import asdict
-
+    import logging # Import logging to modify level
     parser = argparse.ArgumentParser(description="KakaoTalk Extractor Module & Helper")
+    parser.add_argument("--debug", action="store_true", help="디버그 로그를 표준 출력으로 표시합니다.")
     parser.add_argument("--as-wsl-helper", action="store_true", help="Run as a message extraction helper for WSL.")
     parser.add_argument("--list-rooms-helper", action="store_true", help="Run as a room list helper for WSL.")
     parser.add_argument("--rooms", nargs='?', const=True, default=None, help="Comma-separated list of target room names. If omitted, uses config.")
-    parser.add_argument("--max-messages", type=int, default=100, help="Max messages to extract for helper.")
+    parser.add_argument("--max-messages", type=int, default=10000, help="Max messages to extract for helper.")
     parser.add_argument("--test-list-rooms", action="store_true", help="Interactively test listing chat rooms.")
     parser.add_argument("--test-extract", action="store_true", help="Interactively test message extraction using UI automation.")
     parser.add_argument("--convert-txt", type=str, help="Convert a KakaoTalk export .txt file to a .md file.")
 
     args = parser.parse_args()
+
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+        logger.debug("디버그 모드가 활성화되었습니다. 상세 로그를 표준 출력으로 표시합니다.")
 
     # New feature: Convert a .txt file to .md
     if args.convert_txt:
@@ -843,6 +908,7 @@ if __name__ == "__main__":
         print("\nCLI 테스트 옵션:")
         print("  --test-list-rooms : (Windows/WSL) UI 자동화로 채팅방 목록 가져오기")
         print("  --test-extract [--rooms \"...\"] : (Windows/WSL) UI 자동화로 메시지 추출하기")
+        print("  --debug : 디버그 모드로 실행 (상세 로그 출력)")
         print("  --convert-txt <file.txt> : 카카오톡 대화(.txt)를 마크다운(.md)으로 변환")
         print("\nWSL 헬퍼 모드 (내부용):")
         print("  --as-wsl-helper --rooms \"...\" : 메시지 추출")

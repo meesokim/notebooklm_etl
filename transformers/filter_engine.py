@@ -343,7 +343,7 @@ class ContentConverter:
         self,
         contents: List[FilteredContent],
         notebook_name: str = "default",
-        batch_size: int = 20
+        batch_size: int = 2000
     ) -> List[Path]:
         """
         FilteredContent 목록을 마크다운 파일로 저장합니다.
